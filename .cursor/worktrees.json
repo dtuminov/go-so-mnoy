@@ -1,0 +1,3 @@
+{
+  "setup-worktree": ["pip install -e ."]
+}

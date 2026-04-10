@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "go-so-mnoy"
+version = "0.1.0"
+description = "Telegram bot MVP — события и компания (см. bot.md, consept.md)"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.13,<4",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pydantic-settings>=2.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bot*"]

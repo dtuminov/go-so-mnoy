@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+__pycache__/
+.Python
+venv/
+.venv/
+node_modules/
+dist/
+build/
+*.log
+.idea/
+*.egg-info/
