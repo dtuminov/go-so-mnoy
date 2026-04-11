@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import (
@@ -16,7 +16,7 @@ async def list_published_events(
     session: AsyncSession,
     *,
     city_id: int = MOSCOW_CITY_ID,
-    limit: int = 15,
+    limit: int = 100,
 ) -> list[Event]:
     now = datetime.now(timezone.utc)
     stmt = (
@@ -71,6 +71,110 @@ async def user_joined_event(
     return True
 
 
+async def leave_event(
+    session: AsyncSession,
+    *,
+    event_id: int,
+    user_id: int,
+) -> bool:
+    """Удаляет запись участника. True — был удалён, False — записи не было."""
+    result = await session.execute(
+        select(EventParticipant.id).where(
+            EventParticipant.event_id == event_id,
+            EventParticipant.user_id == user_id,
+        )
+    )
+    if result.first() is None:
+        return False
+    await session.execute(
+        delete(EventParticipant).where(
+            EventParticipant.event_id == event_id,
+            EventParticipant.user_id == user_id,
+        )
+    )
+    return True
+
+
+async def get_user_joined_events(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    limit: int = 10,
+) -> list[Event]:
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Event)
+        .join(EventParticipant, EventParticipant.event_id == Event.id)
+        .where(EventParticipant.user_id == user_id)
+        .where(EventParticipant.status == PARTICIPANT_JOINED)
+        .where(Event.starts_at >= now)
+        .where(Event.status == EVENT_PUBLISHED)
+        .order_by(Event.starts_at.asc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_user_organized_events(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    limit: int = 10,
+) -> list[Event]:
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Event)
+        .where(Event.organizer_id == user_id)
+        .where(Event.starts_at >= now)
+        .where(Event.status.in_(["pending_review", "published"]))
+        .order_by(Event.starts_at.asc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_event_participants(
+    session: AsyncSession,
+    *,
+    event_id: int,
+) -> list[tuple[EventParticipant, User]]:
+    stmt = (
+        select(EventParticipant, User)
+        .join(User, User.id == EventParticipant.user_id)
+        .where(EventParticipant.event_id == event_id)
+        .where(EventParticipant.status == PARTICIPANT_JOINED)
+        .order_by(EventParticipant.created_at.asc())
+    )
+    result = await session.execute(stmt)
+    return list(result.all())
+
+
+async def cancel_event(
+    session: AsyncSession,
+    *,
+    event_id: int,
+    organizer_id: int,
+) -> bool:
+    """Отменяет событие. Только организатор. Возвращает True при успехе."""
+    from sqlalchemy import update as sa_update
+    result = await session.execute(
+        select(Event.id).where(
+            Event.id == event_id,
+            Event.organizer_id == organizer_id,
+        )
+    )
+    if result.first() is None:
+        return False
+    await session.execute(
+        sa_update(Event)
+        .where(Event.id == event_id)
+        .values(status="cancelled")
+    )
+    return True
+
+
 async def create_event_draft(
     session: AsyncSession,
     *,
@@ -93,8 +197,3 @@ async def create_event_draft(
     session.add(event)
     await session.flush()
     return event
-
-
-async def get_user_by_telegram_id(session: AsyncSession, telegram_id: int) -> User | None:
-    result = await session.execute(select(User).where(User.telegram_id == telegram_id))
-    return result.scalar_one_or_none()
