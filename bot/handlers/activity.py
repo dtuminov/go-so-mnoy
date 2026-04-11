@@ -36,6 +36,7 @@ from bot.services.activities import (
     is_user_joined,
     join_activity,
     leave_activity,
+    list_published_activities,
     reject_member,
 )
 from bot.services.activity_feed import build_activity_feed_view
@@ -97,6 +98,50 @@ async def _render_card_text(session: AsyncSession, activity: Activity) -> str:
         author_name=author_name,
         author_age=author_age,
     )
+
+
+async def _rerender_feed_card(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    *,
+    user,
+    activity: Activity,
+) -> None:
+    """Полная перерисовка карточки активности в ленте после join/leave
+    того же юзера. Сохраняет ряд навигации, кнопку фильтров и кнопку
+    чата — переиспользует тот же `build_activity_feed_view`, что
+    рисует ленту изначально.
+
+    Индекс активности в текущем (отфильтрованном) списке ищем линейным
+    сканом — список ограничен `limit=100`, это дёшево.
+    """
+    if callback.message is None or callback.message.photo:
+        return
+    tag_ids = _tag_filter(user, activity.kind) or None
+    activities = await list_published_activities(
+        session, kind=activity.kind, tag_ids=tag_ids,
+    )
+    idx = next(
+        (i for i, a in enumerate(activities) if a.id == activity.id),
+        0,
+    )
+    view = await build_activity_feed_view(
+        session,
+        kind=activity.kind,
+        index=idx,
+        tag_ids=tag_ids,
+        viewer_user_id=user.id,
+    )
+    if view is None:
+        return
+    text, kb = view
+    try:
+        await callback.message.edit_text(
+            text, reply_markup=kb, parse_mode=ParseMode.HTML,
+        )
+    except Exception:
+        # «message is not modified» / устаревшее сообщение — не критично.
+        pass
 
 
 # ──────────────────────────── лента: пагинация ───────────────────────────────
@@ -226,33 +271,12 @@ async def on_join(
     else:
         await callback.answer("Отклик отправлен!")
 
-    # Перерисовываем карточку (если это текстовое сообщение карточки).
-    if not callback.message.photo:
-        text = await _render_card_text(session, activity)
-        rows: list[list[InlineKeyboardButton]] = []
-        if is_pending_action:
-            rows.append([InlineKeyboardButton(
-                text="⏳ Заявка отправлена · Отозвать",
-                callback_data=f"al:{activity.id}",
-            )])
-        else:
-            rows.append([InlineKeyboardButton(
-                text="❌ Отписаться",
-                callback_data=f"al:{activity.id}",
-            )])
-            if activity.chat_url:
-                rows.append([InlineKeyboardButton(
-                    text="💬 Чат",
-                    url=activity.chat_url,
-                )])
-        try:
-            await callback.message.edit_text(
-                text,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception:
-            pass
+    # Перерисовываем карточку через builder ленты — он сохранит
+    # ряд навигации, кнопку фильтров и сам решит, какую primary-кнопку
+    # показывать (joined → «Отписаться», pending → «Заявка отправлена»).
+    await _rerender_feed_card(
+        callback, session, user=user, activity=activity,
+    )
 
     # Мгновенный invite в чат — только для подтверждённых.
     if not is_pending_action and activity.chat_url:
@@ -325,18 +349,11 @@ async def on_leave(
         # Из профиля — перерисовываем карточку профиля.
         await rerender_profile_card(callback.message, session, user)
     else:
-        # Из ленты — перерисовываем карточку самой активности.
-        text = await _render_card_text(session, activity)
-        join_label = "Иду ✅" if activity.kind == ACTIVITY_EVENT else "Хочу ✅"
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=join_label, callback_data=f"aj:{activity_id}")],
-            ]
+        # Из ленты — полная перерисовка через builder, чтобы сохранить
+        # навигацию и кнопку фильтров.
+        await _rerender_feed_card(
+            callback, session, user=user, activity=activity,
         )
-        try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-        except Exception:
-            pass
 
 
 # ──────────────────────────── members / responders list ─────────────────────
