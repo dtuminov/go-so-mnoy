@@ -20,7 +20,7 @@ from bot.keyboards.main_menu import (
     BTN_MY_PROFILE,
 )
 from bot.services.activity_feed import build_activity_feed_view
-from bot.services.profile_view import build_profile_view
+from bot.services.profile_view import build_hub_view
 from bot.services.search_prefs import (
     get_event_tag_filter,
     get_seeking_tag_filter,
@@ -99,7 +99,7 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
         await begin_profile_flow(message, state)
         return
 
-    text, kb = await build_profile_view(session, user)
+    text, kb = await build_hub_view(session, user)
     await message.answer_photo(
         user.avatar_file_id,
         caption=text,

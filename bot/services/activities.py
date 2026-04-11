@@ -312,7 +312,8 @@ async def get_user_pending_activities(
     user_id: int,
     limit: int = 10,
 ) -> list[Activity]:
-    """Заявки на вступление, ожидающие подтверждения организатором."""
+    """Заявки на вступление, ожидающие подтверждения организатором
+    (исходящие: Я жду, когда кто-то меня подтвердит)."""
     now = datetime.now(timezone.utc)
     stmt = (
         select(Activity)
@@ -322,11 +323,57 @@ async def get_user_pending_activities(
         .where(Activity.status == ACTIVITY_PUBLISHED)
         .where(Activity.expires_at >= now)
         .options(selectinload(Activity.tags))
-        .order_by(Activity.created_at.desc())
+        .order_by(Activity.expires_at.asc())
         .limit(limit)
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def get_activities_with_incoming_pending(
+    session: AsyncSession,
+    *,
+    creator_id: int,
+    limit: int = 20,
+) -> list[Activity]:
+    """Мои активности, у которых есть хотя бы один pending-член
+    (входящие: кто-то ждёт моего решения). Только для private."""
+    now = datetime.now(timezone.utc)
+    inner = (
+        select(ActivityMember.activity_id)
+        .where(ActivityMember.status == MEMBER_PENDING)
+    )
+    stmt = (
+        select(Activity)
+        .where(Activity.creator_id == creator_id)
+        .where(Activity.status == ACTIVITY_PUBLISHED)
+        .where(Activity.expires_at >= now)
+        .where(Activity.id.in_(inner))
+        .options(selectinload(Activity.tags))
+        .order_by(Activity.expires_at.asc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_user_role_in_activity(
+    session: AsyncSession,
+    *,
+    activity: Activity,
+    user_id: int,
+) -> str:
+    """Возвращает одно из: `'creator'`, `'joined'`, `'pending'`, `'none'`.
+    Используется экраном деталей активности в профиле, чтобы выбрать
+    правильный набор управляющих кнопок."""
+    if activity.creator_id == user_id:
+        return "creator"
+    membership = await get_user_membership(
+        session, activity_id=activity.id, user_id=user_id,
+    )
+    if membership is None:
+        return "none"
+    return membership.status  # 'joined' | 'pending'
 
 
 async def get_user_created_activities(
