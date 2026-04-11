@@ -13,6 +13,7 @@ from bot.keyboards.main_menu import BTN_CREATE_EVENT, BTN_FIND_COMPANY, BTN_FIND
 from bot.services.company_seeking import get_user_seekings
 from bot.services.event_feed import build_event_feed_view
 from bot.services.events import get_user_joined_events, get_user_organized_events
+from bot.services.search_prefs import get_event_tag_filter, get_seeking_tag_filter
 from bot.services.users import is_profile_complete, upsert_user_from_message
 from bot.utils.formatting import esc, format_datetime_msk
 
@@ -21,11 +22,16 @@ router = Router(name="menu")
 
 @router.message(F.text == BTN_FIND_EVENTS, StateFilter(default_state))
 async def on_find_events(message: Message, session: AsyncSession) -> None:
-    view = await build_event_feed_view(session, index=0)
+    user = await upsert_user_from_message(session, message)
+    ids = get_event_tag_filter(user)
+    view = await build_event_feed_view(session, index=0, tag_ids=ids or None)
     if view is None:
-        await message.answer(
-            "Пока нет опубликованных событий в Москве. Загляни позже или создай своё — «➕ Создать событие».",
+        hint = (
+            "По выбранным тегам событий нет. Нажми «🔎 Фильтры» в ленте и сбрось."
+            if ids
+            else "Пока нет опубликованных событий в Москве. Загляни позже или создай своё — «➕ Создать событие»."
         )
+        await message.answer(hint)
         return
     text, kb = view
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -33,7 +39,9 @@ async def on_find_events(message: Message, session: AsyncSession) -> None:
 
 @router.message(F.text == BTN_FIND_COMPANY, StateFilter(default_state))
 async def on_find_company(message: Message, session: AsyncSession) -> None:
-    view = await build_feed_view(session, index=0)
+    user = await upsert_user_from_message(session, message)
+    ids = get_seeking_tag_filter(user)
+    view = await build_feed_view(session, 0, tag_ids=ids or None)
     if view is None:
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -131,6 +139,6 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
 async def on_create_event_entry(message: Message, state: FSMContext) -> None:
     await state.set_state(CreateEventSG.title)
     await message.answer(
-        "Создаём событие. Шаг 1/4: <b>название</b> (до 120 символов).\n"
+        "Создаём событие. Шаг 1/5: <b>название</b> (до 120 символов).\n"
         "Отмена: /cancel",
     )

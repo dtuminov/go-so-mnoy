@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.constants import EVENT_PUBLISHED
 from bot.handlers.create_event import CreateEventSG
 from bot.handlers.profile import ProfileSG, begin_profile_flow
+from bot.keyboards.events_feed import format_event_card_text
 from bot.services.event_feed import build_event_feed_view
 from bot.services.events import (
     cancel_event,
@@ -17,15 +18,16 @@ from bot.services.events import (
     list_published_events,
     user_joined_event,
 )
+from bot.services.search_prefs import get_event_tag_filter
 from bot.services.users import is_profile_complete, upsert_telegram_user
-from bot.utils.formatting import esc, format_datetime_msk
+from bot.utils.formatting import esc
 
 router = Router(name="events")
 
 
 @router.callback_query(F.data.startswith("evp:g:"))
 async def on_event_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
-    if callback.message is None:
+    if callback.message is None or callback.from_user is None:
         await callback.answer()
         return
     try:
@@ -33,7 +35,9 @@ async def on_event_feed_page(callback: CallbackQuery, session: AsyncSession) -> 
     except (IndexError, ValueError):
         await callback.answer("Некорректные данные", show_alert=True)
         return
-    view = await build_event_feed_view(session, index=idx)
+    user = await upsert_telegram_user(session, callback.from_user)
+    ids = get_event_tag_filter(user)
+    view = await build_event_feed_view(session, index=idx, tag_ids=ids or None)
     if view is None:
         await callback.answer("Событий больше нет", show_alert=True)
         return
@@ -44,12 +48,17 @@ async def on_event_feed_page(callback: CallbackQuery, session: AsyncSession) -> 
 
 @router.callback_query(F.data.startswith("evp:c:"))
 async def on_event_feed_counter(callback: CallbackQuery, session: AsyncSession) -> None:
+    if callback.from_user is None:
+        await callback.answer()
+        return
     try:
         idx = int(callback.data.split(":", 2)[2])
     except (IndexError, ValueError):
         await callback.answer()
         return
-    events = await list_published_events(session)
+    user = await upsert_telegram_user(session, callback.from_user)
+    ids = get_event_tag_filter(user)
+    events = await list_published_events(session, tag_ids=ids or None)
     if not events:
         await callback.answer()
         return
@@ -74,13 +83,7 @@ async def on_event_open(callback: CallbackQuery, session: AsyncSession) -> None:
         return
 
     n = await count_participants(session, event_id)
-    text = (
-        f"<b>{esc(event.title)}</b>\n"
-        f"{format_datetime_msk(event.starts_at)}\n"
-        f"📍 {esc(event.place_text)}\n"
-        f"👥 Участников: {n}\n\n"
-        f"{esc(event.description)}"
-    )
+    text = format_event_card_text(event, participants=n)
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Иду ✅", callback_data=f"j:{event_id}")],
@@ -147,13 +150,7 @@ async def on_event_join(
         await callback.answer("Ты в списке участников!")
         # Обновляем карточку — добавляем кнопку «Отписаться»
         n = await count_participants(session, event_id)
-        text = (
-            f"<b>{esc(event.title)}</b>\n"
-            f"{format_datetime_msk(event.starts_at)}\n"
-            f"📍 {esc(event.place_text)}\n"
-            f"👥 Участников: {n}\n\n"
-            f"{esc(event.description)}"
-        )
+        text = format_event_card_text(event, participants=n)
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="❌ Отписаться", callback_data=f"uleave:{event_id}")],
@@ -183,13 +180,7 @@ async def on_event_leave(callback: CallbackQuery, session: AsyncSession) -> None
         event = await get_event(session, event_id)
         if event:
             n = await count_participants(session, event_id)
-            text = (
-                f"<b>{esc(event.title)}</b>\n"
-                f"{format_datetime_msk(event.starts_at)}\n"
-                f"📍 {esc(event.place_text)}\n"
-                f"👥 Участников: {n}\n\n"
-                f"{esc(event.description)}"
-            )
+            text = format_event_card_text(event, participants=n)
             kb = InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(text="Иду ✅", callback_data=f"j:{event_id}")],

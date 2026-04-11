@@ -19,8 +19,9 @@ from sqlalchemy import select
 
 from bot.constants import MOSCOW_CITY_ID, SEEKING_PUBLISHED
 from bot.handlers.profile import ProfileSG, begin_profile_flow
-from bot.models import User
 from bot.keyboards.main_menu import main_menu_reply
+from bot.keyboards.tag_picker import format_tags_inline, tag_picker_keyboard
+from bot.models import User
 from bot.services.company_seeking import (
     close_seeking,
     count_responses,
@@ -31,6 +32,8 @@ from bot.services.company_seeking import (
     list_published_seekings,
     user_responded,
 )
+from bot.services.search_prefs import get_seeking_tag_filter
+from bot.services.tags import get_tags_by_ids, list_active_tags
 from bot.services.users import is_profile_complete, upsert_telegram_user, upsert_user_from_message
 from bot.utils.formatting import esc, format_datetime_msk
 
@@ -43,19 +46,33 @@ class CreateSeekingSG(StatesGroup):
     title = State()
     body = State()
     duration = State()
+    tags = State()
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
 
-def _seeking_text(seeking, *, author, responses: int) -> str:
+def _seeking_text(
+    seeking,
+    *,
+    author,
+    responses: int,
+    active_filter=None,
+) -> str:
     name = esc(author.first_name or author.username or "Аноним") if author else "Аноним"
     age_str = f", {author.age} лет" if author and author.age else ""
+    header = "<b>Ищут компанию · Москва</b>"
+    if active_filter:
+        header += f"\n<i>🔎 фильтр: {esc(format_tags_inline(active_filter))}</i>"
     lines = [
+        header,
+        "",
         f"<b>{esc(seeking.title)}</b>",
         f"👤 {name}{age_str}",
         f"⏳ до {format_datetime_msk(seeking.expires_at)}",
         f"🙋 Откликов: {responses}",
     ]
+    if seeking.tags:
+        lines.append(f"🏷 {esc(format_tags_inline(list(seeking.tags)))}")
     if seeking.body:
         lines += ["", esc(seeking.body)]
     return "\n".join(lines)
@@ -73,20 +90,29 @@ def _feed_keyboard(idx: int, total: int, seeking_id: int) -> InlineKeyboardMarku
                 InlineKeyboardButton(text="➡️", callback_data=nxt),
             ],
             [InlineKeyboardButton(text="Хочу ✅", callback_data=f"sr:{seeking_id}")],
-            [InlineKeyboardButton(text="➕ Предложить своё", callback_data="sk:create")],
+            [
+                InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:s:open"),
+                InlineKeyboardButton(text="➕ Предложить своё", callback_data="sk:create"),
+            ],
         ]
     )
 
 
-async def build_feed_view(session: AsyncSession, index: int):
-    seekings = await list_published_seekings(session)
+async def build_feed_view(
+    session: AsyncSession,
+    index: int,
+    *,
+    tag_ids: list[int] | None = None,
+):
+    seekings = await list_published_seekings(session, tag_ids=tag_ids)
     if not seekings:
         return None
     idx = max(0, min(index, len(seekings) - 1))
     s = seekings[idx]
     author = await get_author(session, s)
     n = await count_responses(session, s.id)
-    text = _seeking_text(s, author=author, responses=n)
+    active_filter = await get_tags_by_ids(session, tag_ids) if tag_ids else []
+    text = _seeking_text(s, author=author, responses=n, active_filter=active_filter)
     kb = _feed_keyboard(idx, len(seekings), s.id)
     return text, kb
 
@@ -95,7 +121,7 @@ async def build_feed_view(session: AsyncSession, index: int):
 
 @router.callback_query(F.data.startswith("sk:g:"))
 async def on_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
-    if callback.message is None:
+    if callback.message is None or callback.from_user is None:
         await callback.answer()
         return
     try:
@@ -103,7 +129,9 @@ async def on_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
     except (IndexError, ValueError):
         await callback.answer("Некорректные данные", show_alert=True)
         return
-    view = await build_feed_view(session, idx)
+    user = await upsert_telegram_user(session, callback.from_user)
+    ids = get_seeking_tag_filter(user)
+    view = await build_feed_view(session, idx, tag_ids=ids or None)
     if view is None:
         await callback.answer("Заявок больше нет", show_alert=True)
         return
@@ -114,12 +142,17 @@ async def on_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
 
 @router.callback_query(F.data.startswith("sk:c:"))
 async def on_feed_counter(callback: CallbackQuery, session: AsyncSession) -> None:
+    if callback.from_user is None:
+        await callback.answer()
+        return
     try:
         idx = int(callback.data.split(":", 2)[2])
     except (IndexError, ValueError):
         await callback.answer()
         return
-    seekings = await list_published_seekings(session)
+    user = await upsert_telegram_user(session, callback.from_user)
+    ids = get_seeking_tag_filter(user)
+    seekings = await list_published_seekings(session, tag_ids=ids or None)
     if not seekings:
         await callback.answer()
         return
@@ -291,7 +324,7 @@ async def on_create_start_cb(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(CreateSeekingSG.title)
     await callback.message.answer(
         "Создаём заявку «ищу компанию».\n\n"
-        "<b>Шаг 1/3</b>: коротко — <b>что хочешь сделать?</b>\n"
+        "<b>Шаг 1/4</b>: коротко — <b>что хочешь сделать?</b>\n"
         "Например: «Сходить в кино», «Поиграть в настолки».\n"
         "Отмена: /cancel",
         parse_mode=ParseMode.HTML,
@@ -316,7 +349,7 @@ async def seeking_title(message: Message, state: FSMContext) -> None:
     await state.update_data(title=title)
     await state.set_state(CreateSeekingSG.body)
     await message.answer(
-        "<b>Шаг 2/3</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
+        "<b>Шаг 2/4</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
         "Можно коротко, можно развёрнуто.",
         parse_mode=ParseMode.HTML,
     )
@@ -340,10 +373,14 @@ async def seeking_body(message: Message, state: FSMContext) -> None:
         ]
     )
     await message.answer(
-        "<b>Шаг 3/3</b>: сколько дней будет актуальна заявка?",
+        "<b>Шаг 3/4</b>: сколько дней будет актуальна заявка?",
         reply_markup=kb,
         parse_mode=ParseMode.HTML,
     )
+
+
+CT_S_PREFIX = "ct:s"
+CT_S_TMP_KEY = "create_seeking_tag_ids"
 
 
 @router.callback_query(F.data.startswith("skd:"), StateFilter(CreateSeekingSG.duration))
@@ -371,8 +408,90 @@ async def seeking_duration(
         return
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-    user = await upsert_telegram_user(session, callback.from_user)
+    await state.update_data(expires_at_iso=expires_at.isoformat(), **{CT_S_TMP_KEY: []})
+    await state.set_state(CreateSeekingSG.tags)
 
+    tags = await list_active_tags(session)
+    kb = tag_picker_keyboard(
+        tags=tags,
+        selected_ids=set(),
+        prefix=CT_S_PREFIX,
+        with_done=True,
+    )
+    await callback.message.answer(
+        "<b>Шаг 4/4</b>: выбери теги (минимум один). "
+        "Нажми на тег, чтобы отметить, и «✅ Готово» когда выберешь.",
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data.startswith(f"{CT_S_PREFIX}:t:"),
+    StateFilter(CreateSeekingSG.tags),
+)
+async def seeking_tags_toggle(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    try:
+        tag_id = int(callback.data.split(":", 3)[3])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    data = await state.get_data()
+    current = set(data.get(CT_S_TMP_KEY) or [])
+    if tag_id in current:
+        current.remove(tag_id)
+    else:
+        current.add(tag_id)
+    await state.update_data({CT_S_TMP_KEY: sorted(current)})
+    tags = await list_active_tags(session)
+    kb = tag_picker_keyboard(
+        tags=tags,
+        selected_ids=current,
+        prefix=CT_S_PREFIX,
+        with_done=True,
+    )
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data == f"{CT_S_PREFIX}:done",
+    StateFilter(CreateSeekingSG.tags),
+)
+async def seeking_tags_done(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    tag_ids = list(data.get(CT_S_TMP_KEY) or [])
+    if not tag_ids:
+        await callback.answer("Выбери хотя бы один тег", show_alert=True)
+        return
+
+    title = data.get("title")
+    body = data.get("body")
+    expires_raw = data.get("expires_at_iso")
+    if not title or not body or not expires_raw:
+        await state.clear()
+        await callback.message.answer(
+            "Данные потерялись. Начни снова.",
+            reply_markup=main_menu_reply(),
+        )
+        await callback.answer()
+        return
+
+    expires_at = datetime.fromisoformat(expires_raw)
+    user = await upsert_telegram_user(session, callback.from_user)
     await create_seeking_draft(
         session,
         author_id=user.id,
@@ -380,6 +499,7 @@ async def seeking_duration(
         title=title,
         body=body,
         expires_at=expires_at,
+        tag_ids=tag_ids,
     )
     await state.clear()
     await callback.message.answer(
