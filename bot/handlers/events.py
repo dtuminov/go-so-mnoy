@@ -20,6 +20,7 @@ from bot.services.events import (
     user_joined_event,
 )
 from bot.services.notifications import notify_actor_about_new_member
+from bot.services.profile_view import rerender_profile_card
 from bot.services.search_prefs import get_event_tag_filter
 from bot.services.users import get_user_by_id, is_profile_complete, upsert_telegram_user
 from bot.utils.formatting import esc
@@ -220,9 +221,12 @@ async def on_event_leave(callback: CallbackQuery, session: AsyncSession) -> None
     removed = await leave_event(session, event_id=event_id, user_id=user.id)
     if removed:
         await callback.answer("Ты отписался от события.")
-        # Если это карточка события (текстовое сообщение) — обновляем её.
-        # Если это профиль (фото) — не трогаем, edit_text на фото не работает.
-        if not callback.message.photo:
+        if callback.message.photo:
+            # Пришли из профиля — перерисовываем карточку профиля,
+            # чтобы строка записи исчезла.
+            await rerender_profile_card(callback.message, session, user)
+        else:
+            # Пришли из ленты/карточки события — обновляем карточку события.
             event = await get_event(session, event_id)
             if event:
                 n = await count_participants(session, event_id)
@@ -288,14 +292,12 @@ async def on_event_cancel(callback: CallbackQuery, session: AsyncSession) -> Non
     cancelled = await cancel_event(session, event_id=event_id, organizer_id=user.id)
     if cancelled:
         await callback.answer("Событие отменено.", show_alert=True)
-        # Профиль — фото-сообщение, edit_text недоступен; просто убираем клавиатуру у caption.
         if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n<i>🚫 Событие отменено</i>",
-                reply_markup=None,
-                parse_mode=ParseMode.HTML,
-            )
+            # Из профиля — перерисовываем карточку целиком; отменённое
+            # событие пропадёт из «Мои события (организатор)».
+            await rerender_profile_card(callback.message, session, user)
         else:
+            # Из текстовой карточки события — помечаем её и убираем клавиатуру.
             await callback.message.edit_text(
                 (callback.message.text or "") + "\n\n<i>🚫 Отменено</i>",
                 reply_markup=None,

@@ -35,6 +35,7 @@ from bot.services.company_seeking import (
     user_responded,
 )
 from bot.services.notifications import notify_actor_about_new_member
+from bot.services.profile_view import rerender_profile_card
 from bot.services.search_prefs import get_seeking_tag_filter
 from bot.services.tags import get_tags_by_ids, list_active_tags
 from bot.services.users import is_profile_complete, upsert_telegram_user, upsert_user_from_message
@@ -345,11 +346,9 @@ async def on_seeking_close(callback: CallbackQuery, session: AsyncSession) -> No
     if closed:
         await callback.answer("Заявка закрыта.", show_alert=True)
         if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n<i>🗑 Заявка закрыта</i>",
-                reply_markup=None,
-                parse_mode=ParseMode.HTML,
-            )
+            # Из профиля — перерисовываем карточку; закрытая заявка
+            # пропадёт из «Мои заявки».
+            await rerender_profile_card(callback.message, session, user)
         else:
             await callback.message.edit_text(
                 (callback.message.text or "Заявка закрыта.") + "\n\n<i>🗑 Заявка закрыта</i>",
