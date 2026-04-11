@@ -1,14 +1,19 @@
 # Доменная модель
 
-Цель: **события**, **участники**, **«ищу компанию»** отдельно, **города** с первой строкой «Москва», модерация на уровне статусов. Чат внутри события/заявки моделируется как ручная Telegram-ссылка (`chat_url`) — авто-создание групп пока не делаем (бот не имеет права в Bot API).
+После унификации в `Activity` событие и заявка «ищу компанию» — одна и та
+же сущность с дискриминатором `kind` (`'event'` | `'seeking'`). Чат
+внутри активности — ручная Telegram-ссылка `chat_url` (бот не создаёт
+группы сам, см. `tech-debt.md`).
 
-Источники истины (актуализировать при изменениях): ORM в `bot/models/`, миграции в `alembic/versions/001_*` … `006_*`, обзор путей — в `STRUCTURE.md`.
+Источники истины (актуализировать при изменениях): ORM в `bot/models/`,
+миграции в `alembic/versions/001_*` … `007_*`, обзор путей —
+в `STRUCTURE.md`.
 
 ## PlantUML ([PlantText](https://www.planttext.com) и аналоги)
 
-В PlantText нужен синтаксис **PlantUML**, а не Mermaid. Строки вроде `classDiagram` / `direction TB` относятся к Mermaid и дают ошибку парсера.
-
-Готовый файл для вставки в редактор: **`domain-model.puml`** (рядом с этим файлом). Скопируй содержимое `.puml` в [planttext.com](https://www.planttext.com) — диаграмма должна отрисоваться.
+В PlantText нужен синтаксис **PlantUML**, а не Mermaid. Готовый файл —
+**`domain-model.puml`** (рядом с этим файлом). Скопируй содержимое в
+[planttext.com](https://www.planttext.com) — диаграмма нарисуется.
 
 ## Диаграмма классов (Mermaid)
 
@@ -37,47 +42,29 @@ classDiagram
         +datetime? updated_at
     }
 
-    class Event {
+    class Activity {
         +int id
         +int city_id
-        +int organizer_id
+        +int creator_id
+        +string kind
         +string title
-        +text description
-        +datetime starts_at
+        +text body
+        +datetime? starts_at
+        +datetime expires_at
         +string place_text
         +string? chat_url
+        +string visibility
         +string status
         +bool published_notified
         +bool reminder_sent
         +datetime created_at
     }
 
-    class EventParticipant {
+    class ActivityMember {
         +int id
-        +int event_id
+        +int activity_id
         +int user_id
         +string status
-        +bool chat_invite_notified
-        +datetime created_at
-    }
-
-    class CompanySeeking {
-        +int id
-        +int city_id
-        +int author_id
-        +string title
-        +text body
-        +datetime expires_at
-        +string? chat_url
-        +string status
-        +bool published_notified
-        +datetime created_at
-    }
-
-    class CompanySeekingResponse {
-        +int id
-        +int seeking_id
-        +int user_id
         +bool chat_invite_notified
         +datetime created_at
     }
@@ -91,46 +78,79 @@ classDiagram
         +bool is_active
     }
 
-    City "1" --> "*" Event : city
-    City "1" --> "*" CompanySeeking : city
-
-    User "1" --> "*" Event : organizes
-    User "1" --> "*" EventParticipant : member
-    User "1" --> "*" CompanySeeking : author
-    User "1" --> "*" CompanySeekingResponse : responder
-
-    Event "1" --> "*" EventParticipant : participants
-    CompanySeeking "1" --> "*" CompanySeekingResponse : responses
-
-    Event "*" -- "*" Tag : event_tags
-    CompanySeeking "*" -- "*" Tag : seeking_tags
+    City "1" --> "*" Activity : city
+    User "1" --> "*" Activity : creates
+    User "1" --> "*" ActivityMember : member
+    Activity "1" --> "*" ActivityMember : members
+    Activity "*" -- "*" Tag : activity_tags
 ```
+
+## Семантика `kind`
+
+| `kind` | `starts_at` | `expires_at` | `place_text` | Лента |
+|---|---|---|---|---|
+| `'event'`   | обязательно — когда происходит | `starts_at + duration` (мин. 2 ч), фильтр «не истекло» | заполнен | сортировка по `starts_at` ASC |
+| `'seeking'` | NULL | задаётся при создании (1/3/7 дней) | пустой | сортировка по `created_at` DESC |
+
+## `visibility` и approval-flow
+
+| `visibility` | Поведение «join» |
+|---|---|
+| `'open'` (дефолт) | сразу `ActivityMember.status = 'joined'` |
+| `'private'` | `ActivityMember.status = 'pending'`, организатору приходит DM с кнопками ✅/❌ |
+
+- Дефолт `'open'`. Менять — в профиле, кнопка «🔒 Доступ» у каждой
+  своей активности.
+- Approve → `joined`, и пользователь получает DM с (если есть)
+  ссылкой на чат.
+- Reject → запись удаляется (без отдельного `'rejected'`-статуса),
+  пользователь может подать заявку ещё раз. Сообщение об отказе всё
+  равно приходит.
+- Cancel активности шлёт уведомление и `joined`, и `pending` членам.
+- `chat_url` доступен только `joined` — не `pending`. Это касается и
+  моментального инвайта при join, и broadcast при первом заполнении
+  ссылки.
 
 ## Связи и уникальности
 
-- `event_participants(event_id, user_id)` — `UNIQUE`, чтобы один пользователь не мог записаться дважды.
-- `company_seeking_responses(seeking_id, user_id)` — `UNIQUE`, по тем же соображениям.
-- Many-to-many связи реализованы через ассоциативные таблицы без отдельных моделей: **`event_tags(event_id, tag_id)`** и **`seeking_tags(seeking_id, tag_id)`** — оба `ON DELETE CASCADE` со стороны event/seeking и `ON DELETE RESTRICT` со стороны tag.
+- `activity_members(activity_id, user_id)` — `UNIQUE`, чтобы один
+  пользователь не мог записаться дважды (ни как pending, ни как joined).
+- Many-to-many теги: ассоциативная таблица `activity_tags(activity_id,
+  tag_id)`, `ON DELETE CASCADE` со стороны activity и `ON DELETE
+  RESTRICT` со стороны tag.
 - `users.telegram_id` — `UNIQUE`, индекс.
+
+## Индексы (под текущие запросы)
+
+- `activities(city_id, status, starts_at)` — лента событий.
+- `activities(city_id, status, expires_at)` — лента заявок и общий
+  фильтр «не истёкших».
+- `activities(kind)`, `activities(creator_id)` — выборки по
+  дискриминатору и автору.
+- `activity_tags(tag_id)` — фильтр ленты по тегам.
 
 ## Статусы (смысл, не обязательно финальные имена в БД)
 
 | Сущность | Статусы |
 |----------|---------|
-| **Event** | `draft` → `pending_review` → `published` / `rejected` / `cancelled` |
-| **EventParticipant** | `joined` (для `left` сейчас просто удаляем строку) |
-| **CompanySeeking** | `draft` → `pending_review` → `published` → `closed` |
-| **CompanySeekingResponse** | факт отклика — отдельного статуса нет, есть только запись + `chat_invite_notified` |
+| **Activity** | `draft` → `pending_review` → `published` / `rejected` / `cancelled` / `closed` |
+| **ActivityMember** | `pending` (только для `private`) → `joined`. На leave/withdraw/reject — строка просто удаляется. |
 
 ## Поля-флаги уведомлений
 
-- `events.published_notified` / `company_seekings.published_notified` — взведено, когда модератор опубликовал и автор уже получил DM.
-- `events.reminder_sent` — за 2 часа до `starts_at` всем участникам ушло напоминание.
-- `event_participants.chat_invite_notified` / `company_seeking_responses.chat_invite_notified` — участнику/откликнувшемуся уже отправили инвайт-ссылку на чат (либо при join/respond, либо в рассылке после первого заполнения `chat_url`).
+- `activities.published_notified` — взведено, когда модератор опубликовал
+  и автор получил DM (`bot/scheduler.py`).
+- `activities.reminder_sent` — за 2 часа до `starts_at` всем `joined`
+  участникам ушло напоминание. Для `kind='seeking'` не используется.
+- `activity_members.chat_invite_notified` — этому участнику уже отправили
+  инвайт-ссылку (либо при join, либо в рассылке после первого
+  заполнения `chat_url`). Pending-членам инвайт не шлётся, флаг для них
+  остаётся `false` до approve.
 
 ## `users.search_prefs` (JSONB)
 
-Сохранённый пользовательский фильтр поиска — переживает рестарты и сброс FSM. Формат:
+Сохранённый пользовательский фильтр — переживает рестарты и сброс FSM.
+Формат:
 
 ```json
 {
@@ -139,14 +159,26 @@ classDiagram
 }
 ```
 
-Отсутствующий ключ или пустой массив трактуются как «фильтр не задан». Поле полностью пустое сохраняется как `NULL` (см. `bot/services/search_prefs.py`).
+Отсутствующий ключ или пустой массив — «фильтр не задан». Фильтры
+разделены на два набора, потому что у пользователя визуально две ленты
+(«📍 Найти событие» и «🤝 Найти компанию»), и логично иметь
+независимые предпочтения.
 
 ## Теги — фиксированный справочник
 
-Список `tags` редактируется **только новой миграцией**. Стартовый набор сидится в `005_tags_and_search_prefs.py` (`bars`, `board_games`, `cinema`, `exhibitions`, `concerts`, `sport`, `walk`, `food`, `talk`, `other`). У события/заявки может быть N тегов, при создании требуется минимум один.
+Список `tags` правится **только новой миграцией**. Стартовый набор
+сидится в `005_tags_and_search_prefs.py` (`bars`, `board_games`, `cinema`,
+`exhibitions`, `concerts`, `sport`, `walk`, `food`, `talk`, `other`).
+У активности может быть N тегов, при создании требуется минимум один.
 
 ## Примечания
 
-- **MVP по городу**: в коде фильтр по `city_id` Москвы; таблица `cities` с одной строкой — задел на выбор городов.
-- **Канал → бот**: вне БД в ссылке `?start=event_<id>` или `seek_<id>`; при первом `/start` создаётся/обновляется `User`.
-- После согласования полей — отражать изменения в **Alembic**, ORM и в **`STRUCTURE.md`**.
+- **MVP по городу**: в коде фильтр по `city_id` Москвы; таблица `cities`
+  с одной строкой — задел на выбор городов.
+- **Канал → бот**: deep link канонически `?start=act_<id>`. Старые
+  форматы `event_<id>` / `seek_<id>` не резолвятся (id не сохранены при
+  миграции 007), бот честно говорит «ссылка устарела» и предлагает
+  открыть ленту.
+- При первом `/start` создаётся/обновляется `User`.
+- После согласования полей — отражать изменения в **Alembic**, ORM и в
+  **`STRUCTURE.md`**.

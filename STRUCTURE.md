@@ -50,26 +50,25 @@
 | `bot/scheduler.py` | APScheduler: уведомление о публикации (каждые 2 мин) + напоминание за 2 ч (каждые 5 мин) |
 | `bot/db/` | `Base`, фабрика сессий |
 | `bot/middlewares/` | `DbSessionMiddleware` — сессия и commit/rollback на апдейт |
-| `bot/models/` | `User` (+ `search_prefs` JSONB), `City`, `Event` (+ `chat_url`), `EventParticipant` (+ `chat_invite_notified`), `CompanySeeking` (+ `chat_url`), `CompanySeekingResponse` (+ `chat_invite_notified`), `Tag`, ассоциативные `event_tags` / `seeking_tags` (в `associations.py`) |
+| `bot/models/` | `User` (+ `search_prefs` JSONB), `City`, `Activity` (kind/visibility/chat_url/expires_at), `ActivityMember` (status pending/joined + `chat_invite_notified`), `Tag`, ассоциативная `activity_tags` (в `associations.py`) |
 | `bot/services/users.py` | upsert, profile check, update profile |
-| `bot/services/events.py` | события: CRUD, участники, leave, cancel, joined/organized lists, фильтр по тегам в `list_published_events`, `update_event_chat_url`, `is_user_joined_event` |
-| `bot/services/event_feed.py` | карточка ленты событий с пагинацией, активным тег-фильтром и кнопкой «💬 Чат» для записавшихся |
-| `bot/services/company_seeking.py` | заявки: CRUD, отклики, close, responders list, фильтр по тегам в `list_published_seekings`, `update_seeking_chat_url`, `is_user_responded_seeking` |
+| `bot/services/activities.py` | CRUD единой `Activity`: CRUD, members, join/leave, approve/reject, cancel/close, фильтр по тегам в `list_published_activities`, `update_chat_url`, `update_visibility`, `is_user_joined`, helpers профиля |
+| `bot/services/activity_feed.py` | Сборка карточки ленты `Activity` (text+keyboard) для events и seekings — единая функция с параметром `kind` |
 | `bot/services/tags.py` | чтение активных тегов, выборка по id |
-| `bot/services/search_prefs.py` | get/set фильтров пользователя в `users.search_prefs` |
-| `bot/services/notifications.py` | `notify_actor_about_new_member` — DM организатору/автору при join/отклике (общий для events и seekings) |
-| `bot/services/chat_invite_notify.py` | Рассылка инвайт-ссылки участникам/откликнувшимся с флагом `chat_invite_notified`, mark-helpers |
-| `bot/keyboards/main_menu.py` | Reply-меню: найти событие, найти компанию, создать событие, 👤 Мой профиль |
-| `bot/keyboards/events_feed.py` | Инлайн-пагинация ленты событий, `format_event_card_text`, `format_event_feed_text`, кнопки «🔎 Фильтры» и «💬 Чат события» для записавшихся |
+| `bot/services/search_prefs.py` | get/set фильтров пользователя в `users.search_prefs` (отдельно для event-tag и seeking-tag) |
+| `bot/services/notifications.py` | DM-уведомления: `notify_creator_about_new_member` (с веткой `is_pending` и кнопками ✅/❌), `notify_user_about_decision` (approve/reject), `notify_members_about_cancel` |
+| `bot/services/chat_invite_notify.py` | Рассылка инвайт-ссылки joined-членам активности с флагом `chat_invite_notified`, `mark_member_notified` |
+| `bot/services/profile_view.py` | `build_profile_view` + `rerender_profile_card` — карточка профиля и in-place перерисовка после мутаций |
+| `bot/keyboards/main_menu.py` | Reply-меню: найти событие, найти компанию, создать событие, ищу компанию, 👤 Мой профиль, ❌ Отменить |
+| `bot/keyboards/activity_feed.py` | `format_activity_card_text`, `format_activity_feed_text`, `activity_feed_keyboard` — единая клавиатура с поддержкой viewer_joined / viewer_pending / chat_url |
 | `bot/keyboards/tag_picker.py` | Универсальный мульти-селект тегов с параметризованным callback-префиксом |
-| `bot/handlers/common.py` | `/start`, `/help`, deep link `event_` / `seek_` |
-| `bot/handlers/menu.py` | Обработка кнопок главного меню; профиль: записи, организованные события (с 💬 Чат), заявки (с 💬 Чат) |
-| `bot/handlers/events.py` | Лента событий (`evp:`), карточка (`e:`), запись (`j:`) с DM-приглашением в чат и симметричным уведомлением организатора, отписка (`uleave:`), участники (`ep:`), отмена (`ecancel:`) |
-| `bot/handlers/create_event.py` | FSM создания события (6 шагов: title → description → starts_at → place → chat_url → tags); шаг `chat_url` можно пропустить |
-| `bot/handlers/profile.py` | FSM анкеты (фото → возраст → bio); `profile:edit`; авто-запись после анкеты |
-| `bot/handlers/event_chat.py` | Управление ссылкой на чат из профиля: `evch:*` для событий, `skch:*` для заявок; FSM `EditChatSG`; рассылка при первом заполнении |
-| `bot/handlers/company_seeking.py` | Лента заявок (`sk:`), отклик (`sr:`) c DM-приглашением и вызовом общего `notify_actor_about_new_member`, отклики автора (`skp:`), закрыть (`sk:close:`), FSM создания заявки (5 шагов: title → body → duration → chat_url → tags) |
-| `bot/handlers/filters.py` | Пикер тег-фильтров для лент: `tp:e:*` (события) и `tp:s:*` (заявки) — open/toggle/apply/clear/cancel |
+| `bot/handlers/common.py` | `/start`, `/help`, канонический deep link `act_<id>` (старые `event_`/`seek_` → «устарело») |
+| `bot/handlers/menu.py` | Кнопки главного меню; «📍 Найти событие» / «🤝 Найти компанию» — единая лента `Activity` с разным `kind`; открытие профиля |
+| `bot/handlers/activity.py` | Действия над `Activity`: пагинация ленты (`af:g/c:`), join (`aj:`) с веткой open/private, leave (`al:`), members/responders (`amem:`), approve/reject (`amap:` / `amrj:`), cancel (`acan:`), close (`aclose:`) |
+| `bot/handlers/activity_create.py` | FSM создания: `CreateEventSG` (6 шагов) и `CreateSeekingSG` (5 шагов) с шагом chat_url и опцией пропуска |
+| `bot/handlers/activity_chat.py` | Управление настройками активности из профиля: chat_url (`actch:*`, `EditChatSG`, broadcast при первом заполнении) и visibility (`avis:show/set:*`) |
+| `bot/handlers/profile.py` | FSM анкеты (фото → возраст → bio); `profile:edit`; авто-вступление в `pending_join_activity_id` после анкеты |
+| `bot/handlers/filters.py` | Пикер тег-фильтров: `tp:e:*` (events lente) и `tp:s:*` (seekings lente) — open/toggle/apply/clear/cancel; пишет в `users.search_prefs` |
 | `bot/utils/` | Форматирование дат (МСК), парсер даты для FSM, `chat_link.py` — валидатор/нормализатор Telegram-ссылок |
 | `alembic/versions/001_initial_users.py` | Таблица `users` |
 | `alembic/versions/002_domain_core.py` | `cities`, `events`, `event_participants`, `company_seekings`, `company_seeking_responses`; поля профиля в `users` |
@@ -77,3 +76,4 @@
 | `alembic/versions/004_notification_flags.py` | `published_notified` на events/seekings, `reminder_sent` на events |
 | `alembic/versions/005_tags_and_search_prefs.py` | `tags`, `event_tags`, `seeking_tags`, `users.search_prefs` (JSONB); сидится стартовый набор тегов |
 | `alembic/versions/006_chat_links_and_notify_flags.py` | `events.chat_url`, `company_seekings.chat_url`, `event_participants.chat_invite_notified`, `company_seeking_responses.chat_invite_notified` |
+| `alembic/versions/007_unify_activities.py` | Слияние events+seekings в `activities`, event_participants+company_seeking_responses в `activity_members`, event_tags+seeking_tags в `activity_tags`. Копирование данных, дроп legacy-таблиц. Добавляет `visibility`. Для событий `expires_at = starts_at + 2h`. |

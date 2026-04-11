@@ -23,53 +23,33 @@ class User {
   +updated_at : datetime?
 }
 
-class Event {
+class Activity {
   +id : int
   +city_id : int
-  +organizer_id : int
+  +creator_id : int
+  +kind : enum<event|seeking>
   +title : string
-  +description : text
-  +starts_at : datetime
+  +body : text
+  +starts_at : datetime?
+  +expires_at : datetime
   +place_text : string
   +chat_url : string?
+  +visibility : enum<open|private>
   +status : string
   +published_notified : bool
   +reminder_sent : bool
   +created_at : datetime
 }
 
-class EventParticipant {
+class ActivityMember {
   +id : int
-  +event_id : int
+  +activity_id : int
   +user_id : int
-  +status : string
+  +status : enum<pending|joined>
   +chat_invite_notified : bool
   +created_at : datetime
   --
-  unique(event_id, user_id)
-}
-
-class CompanySeeking {
-  +id : int
-  +city_id : int
-  +author_id : int
-  +title : string
-  +body : text
-  +expires_at : datetime
-  +chat_url : string?
-  +status : string
-  +published_notified : bool
-  +created_at : datetime
-}
-
-class CompanySeekingResponse {
-  +id : int
-  +seeking_id : int
-  +user_id : int
-  +chat_invite_notified : bool
-  +created_at : datetime
-  --
-  unique(seeking_id, user_id)
+  unique(activity_id, user_id)
 }
 
 class Tag {
@@ -81,18 +61,10 @@ class Tag {
   +is_active : bool
 }
 
-City "1" --> "*" Event : city
-City "1" --> "*" CompanySeeking : city
-
-User "1" --> "*" Event : organizes
-User "1" --> "*" EventParticipant : member
-User "1" --> "*" CompanySeeking : author
-User "1" --> "*" CompanySeekingResponse : responder
-
-Event "1" --> "*" EventParticipant : participants
-CompanySeeking "1" --> "*" CompanySeekingResponse : responses
-
-Event "*" -- "*" Tag : event_tags
-CompanySeeking "*" -- "*" Tag : seeking_tags
+City "1" --> "*" Activity : city
+User "1" --> "*" Activity : creates
+User "1" --> "*" ActivityMember : member
+Activity "1" --> "*" ActivityMember : members
+Activity "*" -- "*" Tag : activity_tags
 
 @enduml
