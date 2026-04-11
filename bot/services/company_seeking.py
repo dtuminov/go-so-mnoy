@@ -2,15 +2,23 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from bot.constants import MOSCOW_CITY_ID, SEEKING_PUBLISHED
-from bot.models import CompanySeeking, CompanySeekingResponse, User
+from bot.models import (
+    CompanySeeking,
+    CompanySeekingResponse,
+    Tag,
+    User,
+    seeking_tags,
+)
 
 
 async def list_published_seekings(
     session: AsyncSession,
     *,
     city_id: int = MOSCOW_CITY_ID,
+    tag_ids: list[int] | None = None,
     limit: int = 100,
 ) -> list[CompanySeeking]:
     now = datetime.now(timezone.utc)
@@ -19,17 +27,28 @@ async def list_published_seekings(
         .where(CompanySeeking.city_id == city_id)
         .where(CompanySeeking.status == SEEKING_PUBLISHED)
         .where(CompanySeeking.expires_at >= now)
+        .options(selectinload(CompanySeeking.tags))
         .order_by(CompanySeeking.created_at.desc())
         .limit(limit)
     )
+    if tag_ids:
+        subq = (
+            select(seeking_tags.c.seeking_id)
+            .where(seeking_tags.c.seeking_id == CompanySeeking.id)
+            .where(seeking_tags.c.tag_id.in_(tag_ids))
+        )
+        stmt = stmt.where(subq.exists())
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
 async def get_seeking(session: AsyncSession, seeking_id: int) -> CompanySeeking | None:
-    result = await session.execute(
-        select(CompanySeeking).where(CompanySeeking.id == seeking_id)
+    stmt = (
+        select(CompanySeeking)
+        .where(CompanySeeking.id == seeking_id)
+        .options(selectinload(CompanySeeking.tags))
     )
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -132,6 +151,7 @@ async def create_seeking_draft(
     title: str,
     body: str,
     expires_at: datetime,
+    tag_ids: list[int] | None = None,
 ) -> CompanySeeking:
     seeking = CompanySeeking(
         city_id=city_id,
@@ -143,4 +163,10 @@ async def create_seeking_draft(
     )
     session.add(seeking)
     await session.flush()
+    if tag_ids:
+        tags = (
+            await session.execute(select(Tag).where(Tag.id.in_(tag_ids)))
+        ).scalars().all()
+        seeking.tags = list(tags)
+        await session.flush()
     return seeking
