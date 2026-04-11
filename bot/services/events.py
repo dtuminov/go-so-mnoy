@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from bot.constants import (
     EVENT_PENDING_REVIEW,
@@ -9,30 +10,51 @@ from bot.constants import (
     MOSCOW_CITY_ID,
     PARTICIPANT_JOINED,
 )
-from bot.models import Event, EventParticipant, User
+from bot.models import Event, EventParticipant, User, event_tags
 
 
 async def list_published_events(
     session: AsyncSession,
     *,
     city_id: int = MOSCOW_CITY_ID,
+    tag_ids: list[int] | None = None,
     limit: int = 100,
 ) -> list[Event]:
+    """Лента опубликованных будущих событий.
+
+    Если `tag_ids` непустой — оставляем события, у которых есть ХОТЯ БЫ ОДИН
+    из указанных тегов (OR-семантика). Теги подгружаются eager-loadом, чтобы
+    карточка могла их печатать без дополнительных запросов.
+    """
     now = datetime.now(timezone.utc)
     stmt = (
         select(Event)
         .where(Event.city_id == city_id)
         .where(Event.status == EVENT_PUBLISHED)
         .where(Event.starts_at >= now)
+        .options(selectinload(Event.tags))
         .order_by(Event.starts_at.asc())
         .limit(limit)
     )
+    if tag_ids:
+        # EXISTS вместо JOIN+DISTINCT — не ломает ORDER BY и пагинацию.
+        subq = (
+            select(event_tags.c.event_id)
+            .where(event_tags.c.event_id == Event.id)
+            .where(event_tags.c.tag_id.in_(tag_ids))
+        )
+        stmt = stmt.where(subq.exists())
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
 async def get_event(session: AsyncSession, event_id: int) -> Event | None:
-    result = await session.execute(select(Event).where(Event.id == event_id))
+    stmt = (
+        select(Event)
+        .where(Event.id == event_id)
+        .options(selectinload(Event.tags))
+    )
+    result = await session.execute(stmt)
     return result.scalar_one_or_none()
 
 
@@ -184,6 +206,7 @@ async def create_event_draft(
     description: str,
     starts_at: datetime,
     place_text: str,
+    tag_ids: list[int] | None = None,
 ) -> Event:
     event = Event(
         city_id=city_id,
@@ -196,4 +219,10 @@ async def create_event_draft(
     )
     session.add(event)
     await session.flush()
+    if tag_ids:
+        await session.execute(
+            event_tags.insert().values(
+                [{"event_id": event.id, "tag_id": tid} for tid in tag_ids]
+            )
+        )
     return event

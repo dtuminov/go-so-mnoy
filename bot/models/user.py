@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from typing import Any
+
 from sqlalchemy import BigInteger, DateTime, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bot.db.base import Base
@@ -28,6 +31,8 @@ class User(Base):
     avatar_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     age: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    # {"event_tag_ids": [int, ...], "seeking_tag_ids": [int, ...]}
+    search_prefs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     organized_events: Mapped[list["Event"]] = relationship(back_populates="organizer")
     event_participations: Mapped[list["EventParticipant"]] = relationship(

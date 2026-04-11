@@ -6,6 +6,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bot.db.base import Base
+from bot.models.associations import seeking_tags
 
 
 class CompanySeeking(Base):
@@ -33,4 +34,8 @@ class CompanySeeking(Base):
     responses: Mapped[list["CompanySeekingResponse"]] = relationship(
         back_populates="seeking",
         cascade="all, delete-orphan",
+    )
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=seeking_tags,
+        order_by="Tag.sort_order",
     )
