@@ -15,7 +15,14 @@ def _nav_callbacks(idx: int, total: int) -> tuple[str, str, str]:
     )
 
 
-def events_feed_keyboard(idx: int, total: int, event_id: int) -> InlineKeyboardMarkup:
+def events_feed_keyboard(
+    idx: int,
+    total: int,
+    event_id: int,
+    *,
+    chat_url: str | None = None,
+    viewer_joined: bool = False,
+) -> InlineKeyboardMarkup:
     prev_cb, mid_cb, next_cb = _nav_callbacks(idx, total)
     cur = idx + 1
     rows: list[list[InlineKeyboardButton]] = [
@@ -24,9 +31,15 @@ def events_feed_keyboard(idx: int, total: int, event_id: int) -> InlineKeyboardM
             InlineKeyboardButton(text=f"{cur} / {total}", callback_data=mid_cb),
             InlineKeyboardButton(text="➡️", callback_data=next_cb),
         ],
-        [InlineKeyboardButton(text="Иду ✅", callback_data=f"j:{event_id}")],
-        [InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:e:open")],
     ]
+    if viewer_joined:
+        rows.append([InlineKeyboardButton(text="❌ Отписаться", callback_data=f"uleave:{event_id}")])
+    else:
+        rows.append([InlineKeyboardButton(text="Иду ✅", callback_data=f"j:{event_id}")])
+    # Ссылку на чат видят только записавшиеся — это приватный инвайт-линк.
+    if viewer_joined and chat_url:
+        rows.append([InlineKeyboardButton(text="💬 Чат события", url=chat_url)])
+    rows.append([InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:e:open")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

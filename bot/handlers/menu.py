@@ -24,7 +24,9 @@ router = Router(name="menu")
 async def on_find_events(message: Message, session: AsyncSession) -> None:
     user = await upsert_user_from_message(session, message)
     ids = get_event_tag_filter(user)
-    view = await build_event_feed_view(session, index=0, tag_ids=ids or None)
+    view = await build_event_feed_view(
+        session, index=0, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         hint = (
             "По выбранным тегам событий нет. Нажми «🔎 Фильтры» в ленте и сбрось."
@@ -41,7 +43,9 @@ async def on_find_events(message: Message, session: AsyncSession) -> None:
 async def on_find_company(message: Message, session: AsyncSession) -> None:
     user = await upsert_user_from_message(session, message)
     ids = get_seeking_tag_filter(user)
-    view = await build_feed_view(session, 0, tag_ids=ids or None)
+    view = await build_feed_view(
+        session, 0, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -90,7 +94,10 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
         lines += ["", "<b>Мои события (организатор):</b>"]
         for ev in organized:
             status_icon = "✅" if ev.status == "published" else "🕐"
-            lines.append(f"{status_icon} {esc(ev.title)} — {format_datetime_msk(ev.starts_at)}")
+            chat_mark = " · 💬" if ev.chat_url else ""
+            lines.append(
+                f"{status_icon} {esc(ev.title)}{chat_mark} — {format_datetime_msk(ev.starts_at)}"
+            )
             inline_rows.append([
                 InlineKeyboardButton(
                     text=f"👥 Участники: {esc(ev.title[:20])}",
@@ -99,6 +106,12 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
                 InlineKeyboardButton(
                     text="🚫 Отменить",
                     callback_data=f"ecancel:{ev.id}",
+                ),
+            ])
+            inline_rows.append([
+                InlineKeyboardButton(
+                    text=f"💬 Чат: {esc(ev.title[:24])}",
+                    callback_data=f"evch:show:{ev.id}",
                 ),
             ])
 
@@ -115,7 +128,8 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
         lines += ["", "<b>Мои заявки:</b>"]
         for sk in seekings:
             status_icon = "✅" if sk.status == "published" else "🕐"
-            lines.append(f"{status_icon} {esc(sk.title)}")
+            chat_mark = " · 💬" if sk.chat_url else ""
+            lines.append(f"{status_icon} {esc(sk.title)}{chat_mark}")
             inline_rows.append([
                 InlineKeyboardButton(
                     text=f"👥 Отклики: {esc(sk.title[:20])}",
@@ -124,6 +138,12 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
                 InlineKeyboardButton(
                     text="🗑 Закрыть",
                     callback_data=f"sk:close:{sk.id}",
+                ),
+            ])
+            inline_rows.append([
+                InlineKeyboardButton(
+                    text=f"💬 Чат: {esc(sk.title[:24])}",
+                    callback_data=f"skch:show:{sk.id}",
                 ),
             ])
 
@@ -145,6 +165,6 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
 async def on_create_event_entry(message: Message, state: FSMContext) -> None:
     await state.set_state(CreateEventSG.title)
     await message.answer(
-        "Создаём событие. Шаг 1/5: <b>название</b> (до 120 символов).\n"
+        "Создаём событие. Шаг 1/6: <b>название</b> (до 120 символов).\n"
         "Отмена: /cancel",
     )

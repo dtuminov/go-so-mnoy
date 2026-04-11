@@ -179,6 +179,7 @@ async def on_events_filter_apply(
         session,
         index=0,
         tag_ids=ids or None,
+        viewer_user_id=user.id,
     )
     if view is None:
         await callback.message.edit_text(
@@ -205,7 +206,9 @@ async def on_events_filter_cancel(
     await state.update_data({TMP_EVENT_KEY: None})
     user = await upsert_telegram_user(session, callback.from_user)
     ids = get_event_tag_filter(user)
-    view = await build_event_feed_view(session, index=0, tag_ids=ids or None)
+    view = await build_event_feed_view(
+        session, index=0, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         await callback.message.edit_text(
             "Сейчас событий нет. Загляни позже.",
@@ -309,7 +312,9 @@ async def on_seekings_filter_apply(
     await set_seeking_tag_filter(session, user=user, tag_ids=ids)
     await state.update_data({TMP_SEEKING_KEY: None})
 
-    view = await build_seeking_feed_view(session, 0, tag_ids=ids or None)
+    view = await build_seeking_feed_view(
+        session, 0, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         await callback.message.edit_text(
             "По выбранным тегам нет активных заявок. "
@@ -335,7 +340,9 @@ async def on_seekings_filter_cancel(
     await state.update_data({TMP_SEEKING_KEY: None})
     user = await upsert_telegram_user(session, callback.from_user)
     ids = get_seeking_tag_filter(user)
-    view = await build_seeking_feed_view(session, 0, tag_ids=ids or None)
+    view = await build_seeking_feed_view(
+        session, 0, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         await callback.message.edit_text(
             "Сейчас заявок нет. Загляни позже.",
