@@ -36,6 +36,14 @@ from bot.services.users import is_profile_complete, upsert_user_from_message
 router = Router(name="menu")
 
 
+def _filter_reset_kb(reset_callback: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Сбросить фильтр", callback_data=reset_callback)],
+        ],
+    )
+
+
 @router.message(F.text == BTN_FIND_EVENTS, StateFilter(default_state))
 async def on_find_events(message: Message, session: AsyncSession) -> None:
     user = await upsert_user_from_message(session, message)
@@ -48,12 +56,16 @@ async def on_find_events(message: Message, session: AsyncSession) -> None:
         viewer_user_id=user.id,
     )
     if view is None:
-        hint = (
-            "По выбранным тегам событий нет. Нажми «🔎 Фильтры» и сбрось."
-            if ids
-            else "Пока нет опубликованных событий в Москве. Загляни позже или создай своё."
-        )
-        await message.answer(hint)
+        if ids:
+            await message.answer(
+                "По выбранным тегам событий нет. Сбрось фильтр, чтобы посмотреть всё.",
+                reply_markup=_filter_reset_kb("tp:e:reset"),
+            )
+        else:
+            await message.answer(
+                "Пока нет опубликованных событий в Москве. "
+                "Загляни позже или создай своё.",
+            )
         return
     text, kb = view
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
@@ -71,9 +83,16 @@ async def on_find_company(message: Message, session: AsyncSession) -> None:
         viewer_user_id=user.id,
     )
     if view is None:
-        await message.answer(
-            "Пока нет активных заявок в Москве. Будь первым — нажми «➕ Ищу компанию»!",
-        )
+        if ids:
+            await message.answer(
+                "По выбранным тегам активных заявок нет. "
+                "Сбрось фильтр, чтобы посмотреть всё.",
+                reply_markup=_filter_reset_kb("tp:s:reset"),
+            )
+        else:
+            await message.answer(
+                "Пока нет активных заявок в Москве. Будь первым — нажми «➕ Ищу компанию»!",
+            )
         return
     text, kb = view
     await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)

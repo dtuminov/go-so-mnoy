@@ -206,6 +206,24 @@ async def on_events_filter_cancel(
     await callback.answer()
 
 
+@router.callback_query(F.data == "tp:e:reset")
+async def on_events_filter_reset(
+    callback: CallbackQuery, session: AsyncSession,
+) -> None:
+    """Сброс сохранённого фильтра событий из empty-state-сообщения,
+    когда юзер не может добраться до пикера через ленту (она пустая)."""
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
+    await set_event_tag_filter(session, user=user, tag_ids=[])
+    await _render_feed_after(
+        callback, session, user=user, kind=ACTIVITY_EVENT, tag_ids=[],
+        empty_hint="Сейчас событий нет. Загляни позже.",
+    )
+    await callback.answer("Фильтр сброшен")
+
+
 # ──────────────────────────── SEEKINGS feed: tp:s:* ──────────────────────────
 
 
@@ -300,3 +318,19 @@ async def on_seekings_filter_cancel(
         empty_hint="Сейчас заявок нет. Загляни позже.",
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "tp:s:reset")
+async def on_seekings_filter_reset(
+    callback: CallbackQuery, session: AsyncSession,
+) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
+    await set_seeking_tag_filter(session, user=user, tag_ids=[])
+    await _render_feed_after(
+        callback, session, user=user, kind=ACTIVITY_SEEKING, tag_ids=[],
+        empty_hint="Сейчас заявок нет. Загляни позже.",
+    )
+    await callback.answer("Фильтр сброшен")
