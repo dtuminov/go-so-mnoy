@@ -70,3 +70,27 @@ async def update_user_profile(
 async def get_user_by_id(session: AsyncSession, user_id: int) -> User | None:
     result = await session.execute(select(User).where(User.id == user_id))
     return result.scalar_one_or_none()
+
+
+# ──────────────────────────── onboarding flag ───────────────────────────────
+#
+# Хранится в `users.search_prefs` (JSONB) под ключом `onboarded`.
+# Это позволило обойтись без отдельной миграции — вся персистентная
+# мелочёвка про юзера и так лежит здесь.
+
+
+def is_onboarded(user: User) -> bool:
+    prefs = user.search_prefs or {}
+    return bool(prefs.get("onboarded"))
+
+
+async def mark_onboarded(session: AsyncSession, *, user: User) -> None:
+    """Идемпотентно ставит флаг `onboarded=True` в `search_prefs`."""
+    if is_onboarded(user):
+        return
+    prefs = dict(user.search_prefs or {})
+    prefs["onboarded"] = True
+    await session.execute(
+        update(User).where(User.id == user.id).values(search_prefs=prefs),
+    )
+    user.search_prefs = prefs
