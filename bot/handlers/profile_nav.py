@@ -18,6 +18,8 @@ from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery, InputMediaPhoto
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.services.activities import get_activity
+from bot.services.cover import edit_to_activity_cover
 from bot.services.member_carousel import (
     CarouselContext,
     build_member_carousel_view,
@@ -200,10 +202,18 @@ async def on_profile_activity(
         )
         return
     text, kb = view
-    await _nav_edit(
-        callback, text=text, reply_markup=kb,
-        photo_file_id=user.avatar_file_id,
-    )
+
+    # На экране деталей фон — обложка самой активности (или дефолт),
+    # а не аватар юзера. Идём через cover-сервис, который сам решит,
+    # какой file_id или FSInputFile подставить.
+    if callback.message is not None:
+        activity = await get_activity(session, activity_id)
+        await edit_to_activity_cover(
+            callback.message,
+            cover_file_id=activity.cover_file_id if activity else None,
+            caption=text,
+            reply_markup=kb,
+        )
     await callback.answer()
 
 

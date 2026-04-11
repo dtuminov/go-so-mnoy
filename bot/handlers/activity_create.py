@@ -145,7 +145,7 @@ async def _start_event_creation(target: Message, state: FSMContext) -> None:
     отовсюду, где нужно открыть создание события напрямую."""
     await state.set_state(CreateEventSG.title)
     await target.answer(
-        "Создаём событие. Шаг 1/6: <b>название</b> (до 120 символов).",
+        "Создаём событие. Шаг 1/7: <b>название</b> (до 120 символов).",
         reply_markup=cancel_keyboard(),
         parse_mode=ParseMode.HTML,
     )
@@ -153,6 +153,7 @@ async def _start_event_creation(target: Message, state: FSMContext) -> None:
 
 class CreateEventSG(StatesGroup):
     title = State()
+    cover = State()
     description = State()
     starts_at = State()
     place = State()
@@ -163,14 +164,21 @@ class CreateEventSG(StatesGroup):
 CT_E_PREFIX = "ct:e"
 CT_E_TMP_KEY = "create_event_tag_ids"
 CE_CHAT_SKIP_CB = "cecu:skip"
+CE_COVER_SKIP_CB = "cecv:skip"
 
 
-def _chat_url_prompt_kb(skip_cb: str) -> InlineKeyboardMarkup:
+def _skip_kb(skip_cb: str) -> InlineKeyboardMarkup:
+    """Inline-клавиатура с одной кнопкой «⏭ Пропустить» — используется
+    на необязательных шагах FSM (chat_url, cover)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⏭ Пропустить", callback_data=skip_cb)],
         ],
     )
+
+
+# Совместимость на время рефакторинга — старое имя ссылается на новое.
+_chat_url_prompt_kb = _skip_kb
 
 
 async def _render_event_tags_step(
@@ -187,7 +195,7 @@ async def _render_event_tags_step(
         with_done=True,
     )
     await message.answer(
-        "Шаг 6/6: <b>выбери теги</b> (минимум один). "
+        "Шаг 7/7: <b>выбери теги</b> (минимум один). "
         "Нажми на тег, чтобы отметить, и «✅ Готово» когда выберешь.",
         reply_markup=kb,
     )
@@ -208,8 +216,54 @@ async def event_title(message: Message, state: FSMContext) -> None:
     if len(title) > 120:
         title = title[:120]
     await state.update_data(title=title)
+    await state.set_state(CreateEventSG.cover)
+    await message.answer(
+        "Шаг 2/7: <b>обложка</b> — пришли картинку для события.\n\n"
+        "Можно пропустить — тогда покажем стандартную.",
+        reply_markup=_skip_kb(CE_COVER_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(CreateEventSG.cover, F.photo)
+async def event_cover_photo(message: Message, state: FSMContext) -> None:
+    photos = message.photo or []
+    if not photos:
+        await message.answer(
+            "Жду фото. Можешь пропустить — кнопка ниже.",
+            reply_markup=_skip_kb(CE_COVER_SKIP_CB),
+        )
+        return
+    await state.update_data(cover_file_id=photos[-1].file_id)
     await state.set_state(CreateEventSG.description)
-    await message.answer("Шаг 2/6: <b>описание</b> (можно одним сообщением).")
+    await message.answer("Шаг 3/7: <b>описание</b> (можно одним сообщением).")
+
+
+@router.message(CreateEventSG.cover)
+async def event_cover_wrong(message: Message) -> None:
+    await message.answer(
+        "Жду <b>фото</b>. Если не хочешь — нажми «⏭ Пропустить».",
+        reply_markup=_skip_kb(CE_COVER_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == CE_COVER_SKIP_CB, StateFilter(CreateEventSG.cover))
+async def event_cover_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    await state.update_data(cover_file_id=None)
+    await state.set_state(CreateEventSG.description)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        "Шаг 3/7: <b>описание</b> (можно одним сообщением).",
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer("Используем стандартную обложку")
 
 
 @router.message(CreateEventSG.description, F.text)
@@ -221,7 +275,7 @@ async def event_description(message: Message, state: FSMContext) -> None:
     await state.update_data(description=desc[:4000])
     await state.set_state(CreateEventSG.starts_at)
     await message.answer(
-        "Шаг 3/6: <b>дата и время начала</b> (Москва).\n"
+        "Шаг 4/7: <b>дата и время начала</b> (Москва).\n"
         "Примеры: <code>25.04.2026 19:00</code> или <code>2026-04-25 19:00</code>",
     )
 
@@ -236,7 +290,7 @@ async def event_starts(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(starts_at_iso=starts_at.isoformat())
     await state.set_state(CreateEventSG.place)
-    await message.answer("Шаг 4/6: <b>место</b> (адрес, район или «узнаем в чате»).")
+    await message.answer("Шаг 5/7: <b>место</b> (адрес, район или «узнаем в чате»).")
 
 
 @router.message(CreateEventSG.place, F.text)
@@ -248,10 +302,10 @@ async def event_place(message: Message, state: FSMContext) -> None:
     await state.update_data(place_text=place[:500])
     await state.set_state(CreateEventSG.chat_url)
     await message.answer(
-        "Шаг 5/6: <b>ссылка на чат события</b> (например, "
+        "Шаг 6/7: <b>ссылка на чат события</b> (например, "
         "<code>https://t.me/...</code>) — чтобы участники сразу могли попасть в обсуждение.\n\n"
         "Можно пропустить и добавить позже в профиле.",
-        reply_markup=_chat_url_prompt_kb(CE_CHAT_SKIP_CB),
+        reply_markup=_skip_kb(CE_CHAT_SKIP_CB),
         parse_mode=ParseMode.HTML,
     )
 
@@ -342,10 +396,11 @@ async def event_tags_done(
     starts_raw = data.get("starts_at_iso")
     place_text = data.get("place_text")
     chat_url = data.get("chat_url")
+    cover_file_id = data.get("cover_file_id")
     if not title or not description or not starts_raw or not place_text:
         await state.clear()
         await callback.message.answer(
-            "Что-то пошло не так с черновиком. Начни снова: «➕ Создать событие».",
+            "Что-то пошло не так с черновиком. Начни снова: «➕ Создать активность».",
             reply_markup=main_menu_reply(),
         )
         await callback.answer()
@@ -362,6 +417,7 @@ async def event_tags_done(
         starts_at=starts_at,
         place_text=place_text,
         chat_url=chat_url,
+        cover_file_id=cover_file_id,
         tag_ids=tag_ids,
     )
     await state.clear()
@@ -377,6 +433,7 @@ async def event_tags_done(
 
 class CreateSeekingSG(StatesGroup):
     title = State()
+    cover = State()
     body = State()
     duration = State()
     chat_url = State()
@@ -386,6 +443,7 @@ class CreateSeekingSG(StatesGroup):
 CT_S_PREFIX = "ct:s"
 CT_S_TMP_KEY = "create_seeking_tag_ids"
 CS_CHAT_SKIP_CB = "cscu:skip"
+CS_COVER_SKIP_CB = "cscv:skip"
 
 
 async def _start_seeking_creation(target: Message, state: FSMContext) -> None:
@@ -393,7 +451,7 @@ async def _start_seeking_creation(target: Message, state: FSMContext) -> None:
     await state.set_state(CreateSeekingSG.title)
     await target.answer(
         "Создаём заявку «ищу компанию».\n\n"
-        "<b>Шаг 1/5</b>: коротко — <b>что хочешь сделать?</b>\n"
+        "<b>Шаг 1/6</b>: коротко — <b>что хочешь сделать?</b>\n"
         "Например: «Сходить в кино», «Поиграть в настолки».",
         reply_markup=cancel_keyboard(),
         parse_mode=ParseMode.HTML,
@@ -424,12 +482,59 @@ async def seeking_title(message: Message, state: FSMContext) -> None:
     if len(title) > 120:
         title = title[:120]
     await state.update_data(title=title)
+    await state.set_state(CreateSeekingSG.cover)
+    await message.answer(
+        "<b>Шаг 2/6</b>: <b>обложка</b> — пришли картинку для заявки.\n\n"
+        "Можно пропустить — тогда покажем стандартную.",
+        reply_markup=_skip_kb(CS_COVER_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(CreateSeekingSG.cover, F.photo)
+async def seeking_cover_photo(message: Message, state: FSMContext) -> None:
+    photos = message.photo or []
+    if not photos:
+        await message.answer(
+            "Жду фото. Можешь пропустить — кнопка ниже.",
+            reply_markup=_skip_kb(CS_COVER_SKIP_CB),
+        )
+        return
+    await state.update_data(cover_file_id=photos[-1].file_id)
     await state.set_state(CreateSeekingSG.body)
     await message.answer(
-        "<b>Шаг 2/5</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
+        "<b>Шаг 3/6</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
         "Можно коротко, можно развёрнуто.",
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.message(CreateSeekingSG.cover)
+async def seeking_cover_wrong(message: Message) -> None:
+    await message.answer(
+        "Жду <b>фото</b>. Если не хочешь — нажми «⏭ Пропустить».",
+        reply_markup=_skip_kb(CS_COVER_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == CS_COVER_SKIP_CB, StateFilter(CreateSeekingSG.cover))
+async def seeking_cover_skip(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    await state.update_data(cover_file_id=None)
+    await state.set_state(CreateSeekingSG.body)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer(
+        "<b>Шаг 3/6</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
+        "Можно коротко, можно развёрнуто.",
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer("Используем стандартную обложку")
 
 
 @router.message(CreateSeekingSG.body, F.text)
@@ -450,7 +555,7 @@ async def seeking_body(message: Message, state: FSMContext) -> None:
         ]
     )
     await message.answer(
-        "<b>Шаг 3/5</b>: сколько дней будет актуальна заявка?",
+        "<b>Шаг 4/6</b>: сколько дней будет актуальна заявка?",
         reply_markup=kb,
         parse_mode=ParseMode.HTML,
     )
@@ -480,11 +585,11 @@ async def seeking_duration(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(expires_at_iso=expires_at.isoformat())
     await state.set_state(CreateSeekingSG.chat_url)
     await callback.message.answer(
-        "<b>Шаг 4/5</b>: пришли <b>ссылку на чат заявки</b> "
+        "<b>Шаг 5/6</b>: пришли <b>ссылку на чат заявки</b> "
         "(например, <code>https://t.me/...</code>), чтобы откликнувшиеся "
         "сразу могли попасть в обсуждение.\n\n"
         "Можно пропустить и добавить позже в профиле.",
-        reply_markup=_chat_url_prompt_kb(CS_CHAT_SKIP_CB),
+        reply_markup=_skip_kb(CS_CHAT_SKIP_CB),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -498,7 +603,7 @@ async def _render_seeking_tags_step(
         tags=tags, selected_ids=selected_ids, prefix=CT_S_PREFIX, with_done=True,
     )
     await message.answer(
-        "<b>Шаг 5/5</b>: выбери теги (минимум один). "
+        "<b>Шаг 6/6</b>: выбери теги (минимум один). "
         "Нажми на тег, чтобы отметить, и «✅ Готово» когда выберешь.",
         reply_markup=kb,
         parse_mode=ParseMode.HTML,
@@ -590,6 +695,7 @@ async def seeking_tags_done(
     body = data.get("body")
     expires_raw = data.get("expires_at_iso")
     chat_url = data.get("chat_url")
+    cover_file_id = data.get("cover_file_id")
     if not title or not body or not expires_raw:
         await state.clear()
         await callback.message.answer(
@@ -609,6 +715,7 @@ async def seeking_tags_done(
         body=body,
         expires_at=expires_at,
         chat_url=chat_url,
+        cover_file_id=cover_file_id,
         tag_ids=tag_ids,
     )
     await state.clear()

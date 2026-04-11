@@ -42,6 +42,7 @@ from bot.services.activities import (
 )
 from bot.services.activity_feed import build_activity_feed_view
 from bot.services.chat_invite_notify import mark_member_notified
+from bot.services.cover import edit_to_activity_cover, send_activity_cover
 from bot.services.member_carousel import (
     CarouselContext,
     build_member_carousel_view,
@@ -89,6 +90,25 @@ def _members_header(kind: str, title: str) -> str:
     return f"<b>Отклики на «{esc(title)}»:</b>"
 
 
+def _is_profile_context(callback: CallbackQuery) -> bool:
+    """Дискриминатор «откуда нажата кнопка» по inline-клавиатуре
+    исходного сообщения. Профиль использует callback'и `prf:*`,
+    лента — `af:*` / `tp:*` / etc. Если в текущей клавиатуре есть
+    хотя бы одна `prf:*` кнопка — это профильное сообщение.
+
+    После того как лента стала photo-сообщением, проверка
+    `callback.message.photo` уже не различает контексты — оба photo.
+    """
+    msg = callback.message
+    if msg is None or msg.reply_markup is None:
+        return False
+    for row in msg.reply_markup.inline_keyboard:
+        for btn in row:
+            if btn.callback_data and btn.callback_data.startswith("prf:"):
+                return True
+    return False
+
+
 async def _render_card_text(session: AsyncSession, activity: Activity) -> str:
     """Готовит текст карточки активности с учётом kind: для seeking
     подгружает имя автора, чтобы карточка не теряла «лицо» автора при
@@ -119,8 +139,12 @@ async def _rerender_feed_card(
 
     Индекс активности в текущем (отфильтрованном) списке ищем линейным
     сканом — список ограничен `limit=100`, это дёшево.
+
+    Карточка ленты — это photo-сообщение, поэтому используем
+    `edit_to_activity_cover` (`edit_message_media`) — она же сама
+    глотает «message is not modified».
     """
-    if callback.message is None or callback.message.photo:
+    if callback.message is None:
         return
     tag_ids = _tag_filter(user, activity.kind) or None
     activities = await list_published_activities(
@@ -139,14 +163,13 @@ async def _rerender_feed_card(
     )
     if view is None:
         return
-    text, kb = view
-    try:
-        await callback.message.edit_text(
-            text, reply_markup=kb, parse_mode=ParseMode.HTML,
-        )
-    except Exception:
-        # «message is not modified» / устаревшее сообщение — не критично.
-        pass
+    cover_file_id, text, kb = view
+    await edit_to_activity_cover(
+        callback.message,
+        cover_file_id=cover_file_id,
+        caption=text,
+        reply_markup=kb,
+    )
 
 
 # ──────────────────────────── лента: пагинация ───────────────────────────────
@@ -174,8 +197,13 @@ async def on_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
     if view is None:
         await callback.answer("Больше нет", show_alert=True)
         return
-    text, kb = view
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    cover_file_id, text, kb = view
+    await edit_to_activity_cover(
+        callback.message,
+        cover_file_id=cover_file_id,
+        caption=text,
+        reply_markup=kb,
+    )
     await callback.answer()
 
 
@@ -350,8 +378,8 @@ async def on_leave(
     else:
         await callback.answer("Отклик убран.")
 
-    if callback.message.photo:
-        # Из профиля — перерисовываем карточку профиля.
+    if _is_profile_context(callback):
+        # Из профиля — возвращаемся в хаб с обновлёнными счётчиками.
         await rerender_profile_to_hub(callback.message, session, user)
     else:
         # Из ленты — полная перерисовка через builder, чтобы сохранить
@@ -587,12 +615,14 @@ async def on_cancel(
         return
 
     await callback.answer("Событие отменено.", show_alert=True)
-    if callback.message.photo:
+    if _is_profile_context(callback):
         await rerender_profile_to_hub(callback.message, session, user)
     else:
+        # Defensive fallback: если когда-то acan: будет вызван не из
+        # профиля, помечаем сообщение и снимаем клавиатуру.
         try:
-            await callback.message.edit_text(
-                (callback.message.text or "") + "\n\n<i>🚫 Отменено</i>",
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "") + "\n\n<i>🚫 Отменено</i>",
                 reply_markup=None,
                 parse_mode=ParseMode.HTML,
             )
@@ -629,12 +659,12 @@ async def on_close(callback: CallbackQuery, session: AsyncSession) -> None:
         return
 
     await callback.answer("Заявка закрыта.", show_alert=True)
-    if callback.message.photo:
+    if _is_profile_context(callback):
         await rerender_profile_to_hub(callback.message, session, user)
     else:
         try:
-            await callback.message.edit_text(
-                (callback.message.text or "Заявка закрыта.") + "\n\n<i>🗑 Закрыта</i>",
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "Заявка закрыта.") + "\n\n<i>🗑 Закрыта</i>",
                 reply_markup=None,
                 parse_mode=ParseMode.HTML,
             )

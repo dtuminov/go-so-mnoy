@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.constants import ACTIVITY_EVENT, ACTIVITY_SEEKING
 from bot.keyboards.tag_picker import tag_picker_keyboard
 from bot.services.activity_feed import build_activity_feed_view
+from bot.services.cover import edit_to_activity_cover
 from bot.services.search_prefs import (
     get_event_tag_filter,
     get_seeking_tag_filter,
@@ -90,15 +91,25 @@ async def _render_picker(
         "Выбери один или несколько тегов. "
         "Нажми ✅ Применить, чтобы обновить ленту."
     )
-    if callback.message is not None:
-        try:
+    if callback.message is None:
+        return
+    # Лента — photo-карточка с обложкой; чтобы остаться в том же
+    # сообщении, правим caption (фон-картинка не меняется на время
+    # показа пикера). Когда юзер нажмёт Apply/Cancel — `_render_feed_after`
+    # вернёт на photo-карточку через `edit_message_media`.
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=text, reply_markup=kb, parse_mode=ParseMode.HTML,
+            )
+        else:
             await callback.message.edit_text(
                 text, reply_markup=kb, parse_mode=ParseMode.HTML,
             )
-        except Exception:
-            await callback.message.answer(
-                text, reply_markup=kb, parse_mode=ParseMode.HTML,
-            )
+    except Exception:
+        await callback.message.answer(
+            text, reply_markup=kb, parse_mode=ParseMode.HTML,
+        )
 
 
 def _empty_state_reset_kb(kind: str) -> InlineKeyboardMarkup:
@@ -129,25 +140,37 @@ async def _render_feed_after(
         tag_ids=tag_ids or None,
         viewer_user_id=user.id,
     )
-    try:
-        if view is None:
-            # Если фильтр непустой — кладём кнопку сброса прямо в это
-            # же сообщение, чтобы юзер мог выбраться из тупика без
-            # перехода в другую ленту.
-            empty_kb = _empty_state_reset_kb(kind) if tag_ids else None
-            await callback.message.edit_text(
-                empty_hint,
-                reply_markup=empty_kb,
-                parse_mode=ParseMode.HTML,
-            )
-            return
-        text, kb = view
-        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
-    except Exception:
-        # «message is not modified» / просроченное сообщение / прочие
-        # 400-е от Telegram — для UX это не важно, alert юзеру всё равно
-        # уже отправлен.
-        pass
+    if view is None:
+        # Лента пустая. Сообщение с фильтрами/лентой — это photo-карточка
+        # активности, превратить её обратно в текст нельзя. Меняем
+        # caption на empty-state и (если фильтр активен) даём кнопку
+        # сброса прямо тут. Фон-картинка остаётся прежней — это
+        # компромисс ради того, чтобы UX оставался в одном сообщении.
+        empty_kb = _empty_state_reset_kb(kind) if tag_ids else None
+        try:
+            if callback.message.photo:
+                await callback.message.edit_caption(
+                    caption=empty_hint,
+                    reply_markup=empty_kb,
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await callback.message.edit_text(
+                    empty_hint,
+                    reply_markup=empty_kb,
+                    parse_mode=ParseMode.HTML,
+                )
+        except Exception:
+            pass
+        return
+
+    cover_file_id, text, kb = view
+    await edit_to_activity_cover(
+        callback.message,
+        cover_file_id=cover_file_id,
+        caption=text,
+        reply_markup=kb,
+    )
 
 
 # ──────────────────────────── EVENTS feed: tp:e:* ────────────────────────────

@@ -369,6 +369,7 @@ async def build_activity_detail_view(
         ])
         rows.append([
             InlineKeyboardButton(text="🔒 Доступ", callback_data=f"avis:show:{activity.id}"),
+            InlineKeyboardButton(text="🖼 Обложка", callback_data=f"actcv:show:{activity.id}"),
         ])
         if activity.kind == ACTIVITY_EVENT:
             rows.append([

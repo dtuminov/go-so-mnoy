@@ -466,6 +466,7 @@ async def create_event_draft(
     starts_at: datetime,
     place_text: str,
     chat_url: str | None = None,
+    cover_file_id: str | None = None,
     visibility: str = VISIBILITY_OPEN,
     tag_ids: list[int] | None = None,
     duration: timedelta = DEFAULT_EVENT_DURATION,
@@ -480,6 +481,7 @@ async def create_event_draft(
         expires_at=starts_at + duration,
         place_text=place_text,
         chat_url=chat_url,
+        cover_file_id=cover_file_id,
         visibility=visibility,
         status=ACTIVITY_PENDING_REVIEW,
     )
@@ -503,6 +505,7 @@ async def create_seeking_draft(
     body: str,
     expires_at: datetime,
     chat_url: str | None = None,
+    cover_file_id: str | None = None,
     visibility: str = VISIBILITY_OPEN,
     tag_ids: list[int] | None = None,
 ) -> Activity:
@@ -516,6 +519,7 @@ async def create_seeking_draft(
         expires_at=expires_at,
         place_text="",
         chat_url=chat_url,
+        cover_file_id=cover_file_id,
         visibility=visibility,
         status=ACTIVITY_PENDING_REVIEW,
     )
@@ -552,6 +556,30 @@ async def update_chat_url(
         update(Activity).where(Activity.id == activity_id).values(chat_url=new_url),
     )
     return True, old_url, new_url
+
+
+async def update_cover(
+    session: AsyncSession,
+    *,
+    activity_id: int,
+    actor_id: int,
+    new_file_id: str | None,
+) -> bool:
+    """Меняет `cover_file_id`. Только creator. `new_file_id=None` —
+    сбрасывает на default."""
+    row = await session.execute(
+        select(Activity.id)
+        .where(Activity.id == activity_id)
+        .where(Activity.creator_id == actor_id),
+    )
+    if row.first() is None:
+        return False
+    await session.execute(
+        update(Activity)
+        .where(Activity.id == activity_id)
+        .values(cover_file_id=new_file_id),
+    )
+    return True
 
 
 async def update_visibility(
