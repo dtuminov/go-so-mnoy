@@ -18,7 +18,7 @@ from __future__ import annotations
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import ACTIVITY_EVENT, ACTIVITY_SEEKING
@@ -101,6 +101,16 @@ async def _render_picker(
             )
 
 
+def _empty_state_reset_kb(kind: str) -> InlineKeyboardMarkup:
+    """Inline-кнопка «🗑 Сбросить фильтр» для empty-state ленты."""
+    callback_data = "tp:e:reset" if kind == ACTIVITY_EVENT else "tp:s:reset"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Сбросить фильтр", callback_data=callback_data)],
+        ],
+    )
+
+
 async def _render_feed_after(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -121,7 +131,15 @@ async def _render_feed_after(
     )
     try:
         if view is None:
-            await callback.message.edit_text(empty_hint, parse_mode=ParseMode.HTML)
+            # Если фильтр непустой — кладём кнопку сброса прямо в это
+            # же сообщение, чтобы юзер мог выбраться из тупика без
+            # перехода в другую ленту.
+            empty_kb = _empty_state_reset_kb(kind) if tag_ids else None
+            await callback.message.edit_text(
+                empty_hint,
+                reply_markup=empty_kb,
+                parse_mode=ParseMode.HTML,
+            )
             return
         text, kb = view
         await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
