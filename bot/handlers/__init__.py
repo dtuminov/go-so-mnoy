@@ -8,10 +8,12 @@ from bot.handlers import (
     filters,
     menu,
     profile,
+    profile_nav,
 )
 
 router = Router()
 router.include_router(profile.router)
+router.include_router(profile_nav.router)
 router.include_router(activity_chat.router)
 router.include_router(activity_create.router)
 router.include_router(activity.router)

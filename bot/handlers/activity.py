@@ -46,7 +46,7 @@ from bot.services.notifications import (
     notify_members_about_cancel,
     notify_user_about_decision,
 )
-from bot.services.profile_view import rerender_profile_card
+from bot.services.profile_view import rerender_profile_to_hub
 from bot.services.search_prefs import (
     get_event_tag_filter,
     get_seeking_tag_filter,
@@ -347,7 +347,7 @@ async def on_leave(
 
     if callback.message.photo:
         # Из профиля — перерисовываем карточку профиля.
-        await rerender_profile_card(callback.message, session, user)
+        await rerender_profile_to_hub(callback.message, session, user)
     else:
         # Из ленты — полная перерисовка через builder, чтобы сохранить
         # навигацию и кнопку фильтров.
@@ -583,7 +583,7 @@ async def on_cancel(
 
     await callback.answer("Событие отменено.", show_alert=True)
     if callback.message.photo:
-        await rerender_profile_card(callback.message, session, user)
+        await rerender_profile_to_hub(callback.message, session, user)
     else:
         try:
             await callback.message.edit_text(
@@ -625,7 +625,7 @@ async def on_close(callback: CallbackQuery, session: AsyncSession) -> None:
 
     await callback.answer("Заявка закрыта.", show_alert=True)
     if callback.message.photo:
-        await rerender_profile_card(callback.message, session, user)
+        await rerender_profile_to_hub(callback.message, session, user)
     else:
         try:
             await callback.message.edit_text(
