@@ -8,7 +8,6 @@ from bot.constants import MOSCOW_CITY_ID, SEEKING_PUBLISHED
 from bot.models import (
     CompanySeeking,
     CompanySeekingResponse,
-    Tag,
     User,
     seeking_tags,
 )
@@ -109,6 +108,27 @@ async def close_seeking(
     return True
 
 
+async def get_user_responded_seekings(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    limit: int = 10,
+) -> list[CompanySeeking]:
+    """Заявки, на которые пользователь откликнулся (активные, не закрытые)."""
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(CompanySeeking)
+        .join(CompanySeekingResponse, CompanySeekingResponse.seeking_id == CompanySeeking.id)
+        .where(CompanySeekingResponse.user_id == user_id)
+        .where(CompanySeeking.expires_at >= now)
+        .where(CompanySeeking.status == SEEKING_PUBLISHED)
+        .order_by(CompanySeeking.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def get_user_seekings(
     session: AsyncSession,
     *,
@@ -164,9 +184,9 @@ async def create_seeking_draft(
     session.add(seeking)
     await session.flush()
     if tag_ids:
-        tags = (
-            await session.execute(select(Tag).where(Tag.id.in_(tag_ids)))
-        ).scalars().all()
-        seeking.tags = list(tags)
-        await session.flush()
+        await session.execute(
+            seeking_tags.insert().values(
+                [{"seeking_id": seeking.id, "tag_id": tid} for tid in tag_ids]
+            )
+        )
     return seeking

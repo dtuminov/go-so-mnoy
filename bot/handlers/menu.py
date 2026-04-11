@@ -10,7 +10,7 @@ from bot.handlers.company_seeking import CreateSeekingSG, build_feed_view
 from bot.handlers.create_event import CreateEventSG
 from bot.handlers.profile import ProfileSG, begin_profile_flow
 from bot.keyboards.main_menu import BTN_CREATE_EVENT, BTN_FIND_COMPANY, BTN_FIND_EVENTS, BTN_MY_PROFILE
-from bot.services.company_seeking import get_user_seekings
+from bot.services.company_seeking import get_user_responded_seekings, get_user_seekings
 from bot.services.event_feed import build_event_feed_view
 from bot.services.events import get_user_joined_events, get_user_organized_events
 from bot.services.search_prefs import get_event_tag_filter, get_seeking_tag_filter
@@ -91,7 +91,7 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
         for ev in organized:
             status_icon = "✅" if ev.status == "published" else "🕐"
             lines.append(f"{status_icon} {esc(ev.title)} — {format_datetime_msk(ev.starts_at)}")
-            row = [
+            inline_rows.append([
                 InlineKeyboardButton(
                     text=f"👥 Участники: {esc(ev.title[:20])}",
                     callback_data=f"ep:{ev.id}",
@@ -100,10 +100,16 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
                     text="🚫 Отменить",
                     callback_data=f"ecancel:{ev.id}",
                 ),
-            ]
-            inline_rows.append(row)
+            ])
 
-    # Заявки «ищу компанию»
+    # Мои отклики на чужие заявки
+    responded = await get_user_responded_seekings(session, user_id=user.id)
+    if responded:
+        lines += ["", "<b>Мои отклики:</b>"]
+        for sk in responded:
+            lines.append(f"• {esc(sk.title)}")
+
+    # Мои заявки «ищу компанию» (как автор)
     seekings = await get_user_seekings(session, author_id=user.id)
     if seekings:
         lines += ["", "<b>Мои заявки:</b>"]

@@ -36,6 +36,7 @@
 | `docker-compose.yml` | Локальный **PostgreSQL 16** |
 | `alembic.ini` | Конфиг Alembic |
 | `restart.sh` | Стоп старого процесса → `alembic upgrade head` → запуск бота |
+| `scripts/approve_all.sh` | Публикует все `pending_review` события и заявки (опции `--events-only`, `--seekings-only`) |
 
 ## Код
 

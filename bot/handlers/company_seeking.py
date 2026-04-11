@@ -206,7 +206,12 @@ async def on_respond(
 
     added = await user_responded(session, seeking_id=seeking_id, user_id=user.id)
     if not added:
-        await callback.answer("Ты уже откликнулся на эту заявку.", show_alert=False)
+        author = await get_author(session, seeking)
+        author_name = esc(author.first_name or author.username or "автор") if author else "автор"
+        await callback.answer(
+            f"Ты уже откликнулся ✅\n{author_name} получил уведомление с твоим профилем и кнопкой написать тебе.",
+            show_alert=True,
+        )
         return
 
     await callback.answer("Отклик отправлен! Автор получит уведомление.")
@@ -285,8 +290,8 @@ async def on_seeking_responders(callback: CallbackQuery, session: AsyncSession) 
         tg_link = f' <a href="tg://user?id={u.telegram_id}">написать</a>' if u.telegram_id else ""
         lines.append(f"{i}. {name}{username_part}{age_part}{tg_link}{bio_part}")
 
-    await callback.message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
     await callback.answer()
+    await callback.message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 # ──────────────────────────── закрыть свою заявку ────────────────────────────
@@ -305,11 +310,19 @@ async def on_seeking_close(callback: CallbackQuery, session: AsyncSession) -> No
     user = await upsert_telegram_user(session, callback.from_user)
     closed = await close_seeking(session, seeking_id=seeking_id, author_id=user.id)
     if closed:
-        await callback.answer("Заявка закрыта.", show_alert=False)
-        await callback.message.edit_text(
-            callback.message.text or "Заявка закрыта.",
-            reply_markup=None,
-        )
+        await callback.answer("Заявка закрыта.", show_alert=True)
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "") + "\n\n<i>🗑 Заявка закрыта</i>",
+                reply_markup=None,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await callback.message.edit_text(
+                (callback.message.text or "Заявка закрыта.") + "\n\n<i>🗑 Заявка закрыта</i>",
+                reply_markup=None,
+                parse_mode=ParseMode.HTML,
+            )
     else:
         await callback.answer("Не удалось закрыть — возможно, это не твоя заявка.", show_alert=True)
 
