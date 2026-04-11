@@ -3,6 +3,7 @@
 - chat_url: показать / добавить / изменить / удалить (`actch:*`),
   при первом заполнении — broadcast приглашений уже подтверждённым.
 - visibility: показать / переключить (`avis:*`).
+- cover: показать / заменить / сбросить (`actcv:*`).
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from bot.constants import VISIBILITY_OPEN, VISIBILITY_PRIVATE
 from bot.services.activities import (
     get_activity,
     update_chat_url,
+    update_cover,
     update_visibility,
 )
 from bot.services.chat_invite_notify import broadcast_chat_invite
@@ -39,6 +41,10 @@ router = Router(name="activity_chat")
 
 class EditChatSG(StatesGroup):
     waiting_link = State()
+
+
+class EditCoverSG(StatesGroup):
+    waiting_photo = State()
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
@@ -351,3 +357,151 @@ async def on_visibility_set(callback: CallbackQuery, session: AsyncSession) -> N
     kb = _vis_keyboard(activity_id, activity.visibility)
     await _edit_or_send(callback, text=text, kb=kb)
     await callback.answer("Готово")
+
+
+# ──────────────────────────── cover manager ────────────────────────────────
+
+
+def _cover_status_text(*, title: str, has_custom: bool) -> str:
+    state = "своя картинка" if has_custom else "стандартная"
+    return (
+        f"<b>🖼 Обложка «{esc(title)}»</b>\n\n"
+        f"Сейчас: <b>{state}</b>.\n\n"
+        "Пришли новое фото, чтобы заменить (если активность уже была "
+        "опубликована — обложка обновится для всех)."
+    )
+
+
+def _cover_keyboard(activity_id: int, has_custom: bool) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(
+            text="📷 Прислать новое фото",
+            callback_data=f"actcv:edit:{activity_id}",
+        )],
+    ]
+    if has_custom:
+        rows.append([InlineKeyboardButton(
+            text="🗑 Сбросить на стандартную",
+            callback_data=f"actcv:reset:{activity_id}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("actcv:show:"))
+async def on_cover_show(callback: CallbackQuery, session: AsyncSession) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    activity_id = _parse_id(callback.data, parts_before=2)
+    if activity_id is None:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
+    activity = await _load_activity_for_creator(
+        session, activity_id=activity_id, creator_id=user.id,
+    )
+    if activity is None:
+        await callback.answer("Не найдено или это не твоё.", show_alert=True)
+        return
+    text = _cover_status_text(
+        title=activity.title, has_custom=bool(activity.cover_file_id),
+    )
+    kb = _cover_keyboard(activity_id, has_custom=bool(activity.cover_file_id))
+    await _edit_or_send(callback, text=text, kb=kb)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("actcv:edit:"))
+async def on_cover_enter_fsm(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
+) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    activity_id = _parse_id(callback.data, parts_before=2)
+    if activity_id is None:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
+    activity = await _load_activity_for_creator(
+        session, activity_id=activity_id, creator_id=user.id,
+    )
+    if activity is None:
+        await callback.answer("Не найдено.", show_alert=True)
+        return
+    await state.set_state(EditCoverSG.waiting_photo)
+    await state.update_data(target_activity_id=activity_id)
+    await callback.message.answer(
+        f"Пришли новое фото для обложки «{esc(activity.title)}». "
+        "Отмена: /cancel",
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("actcv:reset:"))
+async def on_cover_reset(callback: CallbackQuery, session: AsyncSession) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    activity_id = _parse_id(callback.data, parts_before=2)
+    if activity_id is None:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
+    ok = await update_cover(
+        session, activity_id=activity_id, actor_id=user.id, new_file_id=None,
+    )
+    if not ok:
+        await callback.answer("Не удалось — это не твоё.", show_alert=True)
+        return
+    activity = await get_activity(session, activity_id)
+    title = activity.title if activity else "—"
+    text = _cover_status_text(title=title, has_custom=False)
+    kb = _cover_keyboard(activity_id, has_custom=False)
+    await _edit_or_send(callback, text=text, kb=kb)
+    await callback.answer("Сброшено")
+
+
+@router.message(Command("cancel"), StateFilter(EditCoverSG))
+async def cover_edit_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Ок, оставил как было.")
+
+
+@router.message(EditCoverSG.waiting_photo, F.photo)
+async def cover_edit_save(
+    message: Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    if message.from_user is None:
+        return
+    photos = message.photo or []
+    if not photos:
+        await message.answer("Пришли фото или /cancel.")
+        return
+    file_id = photos[-1].file_id
+
+    data = await state.get_data()
+    activity_id = data.get("target_activity_id")
+    if not isinstance(activity_id, int):
+        await state.clear()
+        await message.answer(
+            "Сессия сбросилась — открой «🖼 Обложка» заново в профиле.",
+        )
+        return
+
+    user = await upsert_telegram_user(session, message.from_user)
+    ok = await update_cover(
+        session, activity_id=activity_id, actor_id=user.id, new_file_id=file_id,
+    )
+    if not ok:
+        await state.clear()
+        await message.answer("Это не твоё — изменить нельзя.")
+        return
+    await state.clear()
+    await message.answer("Обложка обновлена ✅")
+
+
+@router.message(EditCoverSG.waiting_photo)
+async def cover_edit_wrong(message: Message) -> None:
+    await message.answer("Жду <b>фото</b>. Или /cancel.", parse_mode=ParseMode.HTML)

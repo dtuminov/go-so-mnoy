@@ -416,12 +416,31 @@ async def rerender_profile_to_hub(
     """Перерисовывает профильное фото-сообщение на актуальный хаб.
 
     Используется после успешных мутаций (leave / cancel / close / etc.),
-    пришедших из профиля, — возвращает юзера на обзор с обновлёнными
+    пришедших из профиля. Возвращает юзера на обзор с обновлёнными
     счётчиками.
+
+    Важно: на экране деталей активности фон — это **обложка
+    активности** (не аватар юзера). Поэтому при возврате в хаб надо
+    явно свапнуть photo через `edit_message_media`, иначе у юзера
+    останется обложка только что отменённого/удалённого события.
     """
+    from aiogram.types import InputMediaPhoto
+
     text, kb = await build_hub_view(session, user)
     try:
-        if callback_message.photo:
+        if callback_message.photo and user.avatar_file_id:
+            await callback_message.edit_media(
+                media=InputMediaPhoto(
+                    media=user.avatar_file_id,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                ),
+                reply_markup=kb,
+            )
+        elif callback_message.photo:
+            # У юзера почему-то нет аватара (не должно происходить, потому
+            # что is_profile_complete его требует). Хотя бы caption обновим,
+            # фон останется тем, что было.
             await callback_message.edit_caption(
                 caption=text,
                 reply_markup=kb,
