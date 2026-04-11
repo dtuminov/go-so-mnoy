@@ -2,7 +2,7 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -14,7 +14,7 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import MOSCOW_CITY_ID
-from bot.keyboards.main_menu import main_menu_reply
+from bot.keyboards.main_menu import BTN_CANCEL, cancel_keyboard, main_menu_reply
 from bot.keyboards.tag_picker import tag_picker_keyboard
 from bot.services.events import create_event_draft
 from bot.services.tags import list_active_tags
@@ -67,7 +67,10 @@ async def _render_tags_step(
     )
 
 
-@router.message(Command("cancel"), StateFilter(CreateEventSG))
+@router.message(
+    or_f(Command("cancel"), F.text == BTN_CANCEL),
+    StateFilter(CreateEventSG),
+)
 async def create_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Создание события отменено.", reply_markup=main_menu_reply())
