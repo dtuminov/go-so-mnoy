@@ -2,8 +2,7 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
 BTN_FIND_EVENTS = "📍 Найти событие"
 BTN_FIND_COMPANY = "🤝 Найти компанию"
-BTN_CREATE_EVENT = "➕ Создать событие"
-BTN_CREATE_SEEKING = "➕ Ищу компанию"
+BTN_CREATE_ACTIVITY = "➕ Создать активность"
 BTN_MY_PROFILE = "👤 Мой профиль"
 BTN_CANCEL = "❌ Отменить"
 
@@ -13,12 +12,9 @@ def main_menu_reply() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text=BTN_FIND_EVENTS),
-                KeyboardButton(text=BTN_CREATE_EVENT),
-            ],
-            [
                 KeyboardButton(text=BTN_FIND_COMPANY),
-                KeyboardButton(text=BTN_CREATE_SEEKING),
             ],
+            [KeyboardButton(text=BTN_CREATE_ACTIVITY)],
             [KeyboardButton(text=BTN_MY_PROFILE)],
         ],
         resize_keyboard=True,

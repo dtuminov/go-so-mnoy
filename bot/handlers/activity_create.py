@@ -1,12 +1,19 @@
-"""Создание Activity. Два подфлоу:
+"""Создание Activity.
+
+Точка входа — единая reply-кнопка «➕ Создать активность». Она
+запускает мини-FSM `CreateActivitySG.kind`, где юзер inline-кнопкой
+выбирает kind: «🎉 Организовать мероприятие» или «🤝 Найти компанию».
+После выбора управление переходит в один из подфлоу:
 
 - `CreateEventSG` — событие (6 шагов: title → description → starts_at →
-  place → chat_url → tags). Visibility выбирается отдельным шагом до
-  тегов? **Решено: visibility ставится по умолчанию `open`** при
-  создании, менять её можно потом в профиле (см. `activity_chat`/visibility
-  manager). Это сокращает FSM и не требует ещё одного шага.
+  place → chat_url → tags). Visibility ставится по умолчанию `open`
+  при создании, менять её можно потом в профиле (`activity_chat` /
+  visibility manager).
 - `CreateSeekingSG` — заявка (5 шагов: title → body → duration →
   chat_url → tags). Аналогично — visibility всегда `open` на старте.
+
+Шаг выбора kind считаем «pre-step» и в нумерации шагов подфлоу не
+участвует — поэтому event остаётся «Шаг N/6», а seeking «Шаг N/5».
 """
 
 from __future__ import annotations
@@ -38,7 +45,110 @@ from bot.utils.datetime_parse import parse_user_datetime_msk
 router = Router(name="activity_create")
 
 
+# ──────────────────────────── KIND DISPATCHER ────────────────────────────────
+
+
+class CreateActivitySG(StatesGroup):
+    """Pre-step перед основным FSM создания: пользователь выбирает,
+    что он создаёт — событие или заявку «ищу компанию»."""
+
+    kind = State()
+
+
+CAK_EVENT_CB = "cak:event"
+CAK_SEEKING_CB = "cak:seeking"
+
+
+def _kind_picker_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🎉 Организовать мероприятие",
+                callback_data=CAK_EVENT_CB,
+            )],
+            [InlineKeyboardButton(
+                text="🤝 Найти компанию для своего дела",
+                callback_data=CAK_SEEKING_CB,
+            )],
+        ],
+    )
+
+
+async def start_create_activity(target: Message, state: FSMContext) -> None:
+    """Точка входа из главного меню — показывает kind-пикер."""
+    await state.set_state(CreateActivitySG.kind)
+    await target.answer(
+        "<b>Что хочешь?</b>\n\n"
+        "🎉 <b>Организовать мероприятие</b> — создать событие на дату и место, "
+        "люди записываются.\n"
+        "🤝 <b>Найти компанию для своего дела</b> — заявка типа «ищу с кем "
+        "сходить», другие откликаются.",
+        reply_markup=_kind_picker_kb(),
+        parse_mode=ParseMode.HTML,
+    )
+    # Показываем reply-кнопку «❌ Отменить» поверх главного меню,
+    # чтобы можно было выйти из выбора kind, как из любого FSM.
+    await target.answer(
+        "Отмена в любой момент: «❌ Отменить» или /cancel",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+@router.message(
+    or_f(Command("cancel"), F.text == BTN_CANCEL),
+    StateFilter(CreateActivitySG),
+)
+async def kind_cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer("Создание отменено.", reply_markup=main_menu_reply())
+
+
+@router.callback_query(
+    F.data == CAK_EVENT_CB,
+    StateFilter(CreateActivitySG.kind),
+)
+async def on_pick_event(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    # Снимаем inline-клавиатуру с предыдущего сообщения, чтобы по нему
+    # нельзя было кликнуть повторно после выбора.
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _start_event_creation(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(
+    F.data == CAK_SEEKING_CB,
+    StateFilter(CreateActivitySG.kind),
+)
+async def on_pick_seeking(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _start_seeking_creation(callback.message, state)
+    await callback.answer()
+
+
 # ──────────────────────────── EVENT FSM ──────────────────────────────────────
+
+
+async def _start_event_creation(target: Message, state: FSMContext) -> None:
+    """Старт event-подфлоу. Зовётся как из dispatcher kind-выбора, так и
+    отовсюду, где нужно открыть создание события напрямую."""
+    await state.set_state(CreateEventSG.title)
+    await target.answer(
+        "Создаём событие. Шаг 1/6: <b>название</b> (до 120 символов).",
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 class CreateEventSG(StatesGroup):
