@@ -204,7 +204,10 @@ async def event_tags_toggle(
         tags=tags, selected_ids=current, prefix=CT_E_PREFIX, with_done=True,
     )
     if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
     await callback.answer()
 
 
@@ -450,7 +453,10 @@ async def seeking_tags_toggle(
         tags=tags, selected_ids=current, prefix=CT_S_PREFIX, with_done=True,
     )
     if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
     await callback.answer()
 
 

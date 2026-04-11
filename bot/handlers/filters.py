@@ -52,6 +52,22 @@ async def _save_tmp_ids(state: FSMContext, key: str, ids: set[int]) -> None:
     await state.update_data({key: sorted(ids)})
 
 
+async def _safe_edit_markup(callback: CallbackQuery, kb) -> None:
+    """edit_reply_markup, который не падает на «message is not modified».
+
+    Telegram возвращает 400, если новая клавиатура байт-в-байт совпадает
+    со старой (например, кнопка «🗑 Сбросить» внутри пикера, когда уже
+    ничего не выбрано). Молча проглатываем — для пользователя ничего
+    не меняется, и это лучше, чем тащить ошибку наружу.
+    """
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_reply_markup(reply_markup=kb)
+    except Exception:
+        pass
+
+
 async def _render_picker(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -103,11 +119,17 @@ async def _render_feed_after(
         tag_ids=tag_ids or None,
         viewer_user_id=user.id,
     )
-    if view is None:
-        await callback.message.edit_text(empty_hint, parse_mode=ParseMode.HTML)
-        return
-    text, kb = view
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    try:
+        if view is None:
+            await callback.message.edit_text(empty_hint, parse_mode=ParseMode.HTML)
+            return
+        text, kb = view
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    except Exception:
+        # «message is not modified» / просроченное сообщение / прочие
+        # 400-е от Telegram — для UX это не важно, alert юзеру всё равно
+        # уже отправлен.
+        pass
 
 
 # ──────────────────────────── EVENTS feed: tp:e:* ────────────────────────────
@@ -151,8 +173,7 @@ async def on_events_filter_toggle(
         tags=tags, selected_ids=current, prefix="tp:e",
         with_apply=True, with_clear=True, with_cancel=True,
     )
-    if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+    await _safe_edit_markup(callback, kb)
     await callback.answer()
 
 
@@ -166,8 +187,7 @@ async def on_events_filter_clear(
         tags=tags, selected_ids=set(), prefix="tp:e",
         with_apply=True, with_clear=True, with_cancel=True,
     )
-    if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+    await _safe_edit_markup(callback, kb)
     await callback.answer("Выбор сброшен")
 
 
@@ -265,8 +285,7 @@ async def on_seekings_filter_toggle(
         tags=tags, selected_ids=current, prefix="tp:s",
         with_apply=True, with_clear=True, with_cancel=True,
     )
-    if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+    await _safe_edit_markup(callback, kb)
     await callback.answer()
 
 
@@ -280,8 +299,7 @@ async def on_seekings_filter_clear(
         tags=tags, selected_ids=set(), prefix="tp:s",
         with_apply=True, with_clear=True, with_cancel=True,
     )
-    if callback.message is not None:
-        await callback.message.edit_reply_markup(reply_markup=kb)
+    await _safe_edit_markup(callback, kb)
     await callback.answer("Выбор сброшен")
 
 
