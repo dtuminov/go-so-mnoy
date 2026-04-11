@@ -19,3 +19,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["bot*"]
+
+[tool.setuptools.package-data]
+"bot.assets" = ["*.png", "*.jpg", "*.jpeg", "*.webp"]
