@@ -5,6 +5,7 @@ from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import ACTIVITY_EVENT, ACTIVITY_PUBLISHED, ACTIVITY_SEEKING
+from bot.handlers.onboarding import start_onboarding
 from bot.keyboards.activity_feed import format_activity_card_text
 from bot.keyboards.main_menu import main_menu_reply
 from bot.services.activities import (
@@ -12,7 +13,11 @@ from bot.services.activities import (
     get_activity,
     get_creator_summary,
 )
-from bot.services.users import upsert_user_from_message
+from bot.services.users import (
+    is_onboarded,
+    mark_onboarded,
+    upsert_user_from_message,
+)
 
 router = Router(name="common")
 
@@ -25,7 +30,7 @@ async def cmd_start(
     state: FSMContext,
 ) -> None:
     await state.clear()
-    await upsert_user_from_message(session, message)
+    user = await upsert_user_from_message(session, message)
     args = (command.args or "").strip()
 
     # Канонический формат ссылки после унификации.
@@ -36,6 +41,7 @@ async def cmd_start(
             await message.answer(
                 "Не понял ссылку. Открываю меню.", reply_markup=main_menu_reply(),
             )
+            await mark_onboarded(session, user=user)
             return
         activity = await get_activity(session, activity_id)
         if activity is None or activity.status != ACTIVITY_PUBLISHED:
@@ -43,6 +49,7 @@ async def cmd_start(
                 "Уже недоступно. Загляни в ленту.",
                 reply_markup=main_menu_reply(),
             )
+            await mark_onboarded(session, user=user)
             return
         members = await count_joined_members(session, activity_id)
         author_name = author_age = None
@@ -61,6 +68,9 @@ async def cmd_start(
             text + f"\n\nОткрой раздел «{section}» и нажми «Иду» / «Хочу», чтобы записаться.",
             reply_markup=main_menu_reply(),
         )
+        # Юзер пришёл по конкретной ссылке — не нужно ему туристического
+        # тура по боту, считаем что онбординг пройден.
+        await mark_onboarded(session, user=user)
         return
 
     # Старые форматы из уже опубликованных постов канала: id'ы старых
@@ -71,6 +81,13 @@ async def cmd_start(
             "Ссылка из старых постов устарела. Открой раздел в меню — там актуальная лента.",
             reply_markup=main_menu_reply(),
         )
+        await mark_onboarded(session, user=user)
+        return
+
+    # Голый /start. Если юзер ещё не видел онбординг — показываем,
+    # иначе обычное приветствие с меню.
+    if not is_onboarded(user):
+        await start_onboarding(message)
         return
 
     await message.answer(

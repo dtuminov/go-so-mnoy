@@ -20,6 +20,7 @@ from bot.keyboards.main_menu import (
     BTN_MY_PROFILE,
 )
 from bot.services.activity_feed import build_activity_feed_view
+from bot.services.cover import send_activity_cover
 from bot.services.profile_view import build_hub_view
 from bot.services.search_prefs import (
     get_event_tag_filter,
@@ -61,8 +62,10 @@ async def on_find_events(message: Message, session: AsyncSession) -> None:
                 "Загляни позже или создай своё.",
             )
         return
-    text, kb = view
-    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    cover_file_id, text, kb = view
+    await send_activity_cover(
+        message, cover_file_id=cover_file_id, caption=text, reply_markup=kb,
+    )
 
 
 @router.message(F.text == BTN_FIND_COMPANY, StateFilter(default_state))
@@ -85,11 +88,13 @@ async def on_find_company(message: Message, session: AsyncSession) -> None:
             )
         else:
             await message.answer(
-                "Пока нет активных заявок в Москве. Будь первым — нажми «➕ Ищу компанию»!",
+                "Пока нет активных заявок в Москве. Будь первым — нажми «➕ Создать активность»!",
             )
         return
-    text, kb = view
-    await message.answer(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+    cover_file_id, text, kb = view
+    await send_activity_cover(
+        message, cover_file_id=cover_file_id, caption=text, reply_markup=kb,
+    )
 
 
 @router.message(F.text == BTN_MY_PROFILE, StateFilter(default_state))

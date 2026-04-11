@@ -18,6 +18,12 @@ from aiogram.enums import ParseMode
 from aiogram.types import CallbackQuery, InputMediaPhoto
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.services.activities import get_activity
+from bot.services.cover import edit_to_activity_cover
+from bot.services.member_carousel import (
+    CarouselContext,
+    build_member_carousel_view,
+)
 from bot.services.profile_view import (
     SECTION_CREATED,
     SECTION_INCOMING_PENDING,
@@ -25,7 +31,6 @@ from bot.services.profile_view import (
     SECTION_PARTICIPATING,
     build_activity_detail_view,
     build_hub_view,
-    build_member_carousel_view,
     build_section_view,
 )
 from bot.services.users import upsert_telegram_user
@@ -197,10 +202,18 @@ async def on_profile_activity(
         )
         return
     text, kb = view
-    await _nav_edit(
-        callback, text=text, reply_markup=kb,
-        photo_file_id=user.avatar_file_id,
-    )
+
+    # На экране деталей фон — обложка самой активности (или дефолт),
+    # а не аватар юзера. Идём через cover-сервис, который сам решит,
+    # какой file_id или FSInputFile подставить.
+    if callback.message is not None:
+        activity = await get_activity(session, activity_id)
+        await edit_to_activity_cover(
+            callback.message,
+            cover_file_id=activity.cover_file_id if activity else None,
+            caption=text,
+            reply_markup=kb,
+        )
     await callback.answer()
 
 
@@ -233,12 +246,16 @@ async def on_profile_member(
         return
 
     user = await upsert_telegram_user(session, callback.from_user)
+    context = CarouselContext(
+        nav_cb_template=f"prf:mem:{section}:{from_page}:{activity_id}:{{idx}}",
+        back_cb=f"prf:act:{section}:{from_page}:{activity_id}",
+        back_label="↩️ К активности",
+    )
     view = await build_member_carousel_view(
         session,
         activity_id=activity_id,
-        from_section=section,
-        from_page=from_page,
         member_index=member_index,
+        context=context,
     )
     if view is None:
         await callback.answer("Участников пока нет.", show_alert=True)

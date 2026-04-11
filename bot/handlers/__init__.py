@@ -7,11 +7,13 @@ from bot.handlers import (
     common,
     filters,
     menu,
+    onboarding,
     profile,
     profile_nav,
 )
 
 router = Router()
+router.include_router(onboarding.router)
 router.include_router(profile.router)
 router.include_router(profile_nav.router)
 router.include_router(activity_chat.router)

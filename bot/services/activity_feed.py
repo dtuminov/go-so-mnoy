@@ -37,7 +37,10 @@ async def build_activity_feed_view(
     city_id: int = MOSCOW_CITY_ID,
     tag_ids: list[int] | None = None,
     viewer_user_id: int | None = None,
-) -> tuple[str, InlineKeyboardMarkup] | None:
+) -> tuple[str | None, str, InlineKeyboardMarkup] | None:
+    """Возвращает `(cover_file_id, caption, keyboard)` или `None`, если
+    лента пустая. `cover_file_id` — `str` для кастомной обложки или
+    `None`, тогда caller через `bot.services.cover` подставит дефолт."""
     activities = await list_published_activities(
         session, kind=kind, city_id=city_id, tag_ids=tag_ids,
     )
@@ -84,4 +87,4 @@ async def build_activity_feed_view(
         viewer_joined=viewer_joined,
         viewer_pending=viewer_pending,
     )
-    return text, kb
+    return act.cover_file_id, text, kb

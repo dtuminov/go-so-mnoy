@@ -62,8 +62,19 @@ def activity_feed_keyboard(
     else:
         rows.append([InlineKeyboardButton(text=_join_button_text(kind), callback_data=f"aj:{activity_id}")])
 
+    # «💬 Чат» (если виден) и «👥 Участники» — в одном ряду пополам.
+    # Если чата нет — «Участники» одни на ряд.
+    members_btn = InlineKeyboardButton(
+        text="👥 Участники",
+        callback_data=f"fmem:o:{activity_id}",
+    )
     if viewer_joined and chat_url:
-        rows.append([InlineKeyboardButton(text="💬 Чат", url=chat_url)])
+        rows.append([
+            InlineKeyboardButton(text="💬 Чат", url=chat_url),
+            members_btn,
+        ])
+    else:
+        rows.append([members_btn])
 
     bottom: list[InlineKeyboardButton] = [
         InlineKeyboardButton(text="🔎 Фильтры", callback_data=_filter_namespace(kind)),
