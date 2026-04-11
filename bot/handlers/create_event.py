@@ -2,7 +2,7 @@ from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -68,7 +68,7 @@ async def _render_tags_step(
 
 
 @router.message(
-    (Command("cancel") | F.text == BTN_CANCEL),
+    or_f(Command("cancel"), F.text == BTN_CANCEL),
     StateFilter(CreateEventSG),
 )
 async def create_cancel(message: Message, state: FSMContext) -> None:

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ParseMode
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command, StateFilter, or_f
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -380,7 +380,7 @@ async def on_create_start_cb(callback: CallbackQuery, state: FSMContext) -> None
 
 
 @router.message(
-    (Command("cancel") | F.text == BTN_CANCEL),
+    or_f(Command("cancel"), F.text == BTN_CANCEL),
     StateFilter(CreateSeekingSG),
 )
 async def seeking_cancel(message: Message, state: FSMContext) -> None:
