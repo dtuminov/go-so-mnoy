@@ -18,6 +18,7 @@ class CompanySeeking(Base):
     title: Mapped[str] = mapped_column(String(255))
     body: Mapped[str] = mapped_column(Text(), default="")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    chat_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status: Mapped[str] = mapped_column(String(32), index=True, default="draft")
     published_notified: Mapped[bool] = mapped_column(default=False, server_default="false")
 

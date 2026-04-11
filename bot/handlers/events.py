@@ -1,4 +1,4 @@
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -8,6 +8,7 @@ from bot.constants import EVENT_PUBLISHED
 from bot.handlers.create_event import CreateEventSG
 from bot.handlers.profile import ProfileSG, begin_profile_flow
 from bot.keyboards.events_feed import format_event_card_text
+from bot.services.chat_invite_notify import mark_participant_notified
 from bot.services.event_feed import build_event_feed_view
 from bot.services.events import (
     cancel_event,
@@ -18,8 +19,10 @@ from bot.services.events import (
     list_published_events,
     user_joined_event,
 )
+from bot.services.notifications import notify_actor_about_new_member
+from bot.services.profile_view import rerender_profile_card
 from bot.services.search_prefs import get_event_tag_filter
-from bot.services.users import is_profile_complete, upsert_telegram_user
+from bot.services.users import get_user_by_id, is_profile_complete, upsert_telegram_user
 from bot.utils.formatting import esc
 
 router = Router(name="events")
@@ -37,7 +40,9 @@ async def on_event_feed_page(callback: CallbackQuery, session: AsyncSession) -> 
         return
     user = await upsert_telegram_user(session, callback.from_user)
     ids = get_event_tag_filter(user)
-    view = await build_event_feed_view(session, index=idx, tag_ids=ids or None)
+    view = await build_event_feed_view(
+        session, index=idx, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         await callback.answer("Событий больше нет", show_alert=True)
         return
@@ -102,6 +107,7 @@ async def on_event_join(
     callback: CallbackQuery,
     session: AsyncSession,
     state: FSMContext,
+    bot: Bot,
 ) -> None:
     if callback.from_user is None or callback.message is None:
         await callback.answer()
@@ -148,16 +154,54 @@ async def on_event_join(
     joined = await user_joined_event(session, event_id=event_id, user_id=user.id)
     if joined:
         await callback.answer("Ты в списке участников!")
-        # Обновляем карточку — добавляем кнопку «Отписаться»
-        n = await count_participants(session, event_id)
-        text = format_event_card_text(event, participants=n)
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
+        # Перерисовываем карточку сообщения (если это текстовое сообщение
+        # карточки, а не фото профиля) — добавляем «❌ Отписаться» и, если
+        # у события есть ссылка, кнопку «💬 Чат события».
+        if not callback.message.photo:
+            n = await count_participants(session, event_id)
+            text = format_event_card_text(event, participants=n)
+            rows: list[list[InlineKeyboardButton]] = [
                 [InlineKeyboardButton(text="❌ Отписаться", callback_data=f"uleave:{event_id}")],
             ]
-        )
-        if callback.message:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+            if event.chat_url:
+                rows.append([InlineKeyboardButton(text="💬 Чат события", url=event.chat_url)])
+            await callback.message.edit_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                parse_mode=ParseMode.HTML,
+            )
+
+        # Если у события уже есть чат — сразу показываем ссылку отдельным
+        # сообщением и помечаем запись как получившую приглашение.
+        if event.chat_url:
+            try:
+                await bot.send_message(
+                    callback.from_user.id,
+                    f"💬 Чат события «{esc(event.title)}»:",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [InlineKeyboardButton(text="💬 Открыть чат", url=event.chat_url)],
+                        ],
+                    ),
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+            await mark_participant_notified(
+                session, event_id=event_id, user_id=user.id,
+            )
+
+        # Симметрия с on_respond: шлём организатору уведомление с профилем.
+        organizer = await get_user_by_id(session, event.organizer_id)
+        if organizer and organizer.id != user.id:
+            await notify_actor_about_new_member(
+                bot,
+                recipient_tg_id=organizer.telegram_id,
+                member=user,
+                entity_title=event.title,
+                entity_kind="event",
+            )
     else:
         await callback.answer("Ты уже записан на это событие.", show_alert=False)
 
@@ -177,9 +221,12 @@ async def on_event_leave(callback: CallbackQuery, session: AsyncSession) -> None
     removed = await leave_event(session, event_id=event_id, user_id=user.id)
     if removed:
         await callback.answer("Ты отписался от события.")
-        # Если это карточка события (текстовое сообщение) — обновляем её.
-        # Если это профиль (фото) — не трогаем, edit_text на фото не работает.
-        if not callback.message.photo:
+        if callback.message.photo:
+            # Пришли из профиля — перерисовываем карточку профиля,
+            # чтобы строка записи исчезла.
+            await rerender_profile_card(callback.message, session, user)
+        else:
+            # Пришли из ленты/карточки события — обновляем карточку события.
             event = await get_event(session, event_id)
             if event:
                 n = await count_participants(session, event_id)
@@ -245,14 +292,12 @@ async def on_event_cancel(callback: CallbackQuery, session: AsyncSession) -> Non
     cancelled = await cancel_event(session, event_id=event_id, organizer_id=user.id)
     if cancelled:
         await callback.answer("Событие отменено.", show_alert=True)
-        # Профиль — фото-сообщение, edit_text недоступен; просто убираем клавиатуру у caption.
         if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n<i>🚫 Событие отменено</i>",
-                reply_markup=None,
-                parse_mode=ParseMode.HTML,
-            )
+            # Из профиля — перерисовываем карточку целиком; отменённое
+            # событие пропадёт из «Мои события (организатор)».
+            await rerender_profile_card(callback.message, session, user)
         else:
+            # Из текстовой карточки события — помечаем её и убираем клавиатуру.
             await callback.message.edit_text(
                 (callback.message.text or "") + "\n\n<i>🚫 Отменено</i>",
                 reply_markup=None,

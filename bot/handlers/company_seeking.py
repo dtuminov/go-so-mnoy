@@ -22,6 +22,7 @@ from bot.handlers.profile import ProfileSG, begin_profile_flow
 from bot.keyboards.main_menu import main_menu_reply
 from bot.keyboards.tag_picker import format_tags_inline, tag_picker_keyboard
 from bot.models import User
+from bot.services.chat_invite_notify import mark_response_notified
 from bot.services.company_seeking import (
     close_seeking,
     count_responses,
@@ -29,12 +30,16 @@ from bot.services.company_seeking import (
     get_author,
     get_seeking,
     get_seeking_responders,
+    is_user_responded_seeking,
     list_published_seekings,
     user_responded,
 )
+from bot.services.notifications import notify_actor_about_new_member
+from bot.services.profile_view import rerender_profile_card
 from bot.services.search_prefs import get_seeking_tag_filter
 from bot.services.tags import get_tags_by_ids, list_active_tags
 from bot.services.users import is_profile_complete, upsert_telegram_user, upsert_user_from_message
+from bot.utils.chat_link import InvalidChatLinkError, normalize_chat_link
 from bot.utils.formatting import esc, format_datetime_msk
 
 router = Router(name="company_seeking")
@@ -46,7 +51,19 @@ class CreateSeekingSG(StatesGroup):
     title = State()
     body = State()
     duration = State()
+    chat_url = State()
     tags = State()
+
+
+CS_CHAT_SKIP_CB = "cscu:skip"
+
+
+def _seeking_chat_url_prompt_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Пропустить", callback_data=CS_CHAT_SKIP_CB)],
+        ],
+    )
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
@@ -78,24 +95,34 @@ def _seeking_text(
     return "\n".join(lines)
 
 
-def _feed_keyboard(idx: int, total: int, seeking_id: int) -> InlineKeyboardMarkup:
+def _feed_keyboard(
+    idx: int,
+    total: int,
+    seeking_id: int,
+    *,
+    chat_url: str | None = None,
+    viewer_responded: bool = False,
+) -> InlineKeyboardMarkup:
     prev = f"sk:g:{max(0, idx - 1)}"
     nxt = f"sk:g:{min(total - 1, idx + 1)}"
     mid = f"sk:c:{idx}"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="⬅️", callback_data=prev),
-                InlineKeyboardButton(text=f"{idx + 1} / {total}", callback_data=mid),
-                InlineKeyboardButton(text="➡️", callback_data=nxt),
-            ],
-            [InlineKeyboardButton(text="Хочу ✅", callback_data=f"sr:{seeking_id}")],
-            [
-                InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:s:open"),
-                InlineKeyboardButton(text="➕ Предложить своё", callback_data="sk:create"),
-            ],
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(text="⬅️", callback_data=prev),
+            InlineKeyboardButton(text=f"{idx + 1} / {total}", callback_data=mid),
+            InlineKeyboardButton(text="➡️", callback_data=nxt),
+        ],
+        [InlineKeyboardButton(text="Хочу ✅", callback_data=f"sr:{seeking_id}")],
+    ]
+    if viewer_responded and chat_url:
+        rows.append([InlineKeyboardButton(text="💬 Чат заявки", url=chat_url)])
+    rows.append(
+        [
+            InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:s:open"),
+            InlineKeyboardButton(text="➕ Предложить своё", callback_data="sk:create"),
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def build_feed_view(
@@ -103,6 +130,7 @@ async def build_feed_view(
     index: int,
     *,
     tag_ids: list[int] | None = None,
+    viewer_user_id: int | None = None,
 ):
     seekings = await list_published_seekings(session, tag_ids=tag_ids)
     if not seekings:
@@ -112,8 +140,19 @@ async def build_feed_view(
     author = await get_author(session, s)
     n = await count_responses(session, s.id)
     active_filter = await get_tags_by_ids(session, tag_ids) if tag_ids else []
+    responded = False
+    if viewer_user_id is not None:
+        responded = await is_user_responded_seeking(
+            session, seeking_id=s.id, user_id=viewer_user_id,
+        )
     text = _seeking_text(s, author=author, responses=n, active_filter=active_filter)
-    kb = _feed_keyboard(idx, len(seekings), s.id)
+    kb = _feed_keyboard(
+        idx,
+        len(seekings),
+        s.id,
+        chat_url=s.chat_url,
+        viewer_responded=responded,
+    )
     return text, kb
 
 
@@ -131,7 +170,9 @@ async def on_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
         return
     user = await upsert_telegram_user(session, callback.from_user)
     ids = get_seeking_tag_filter(user)
-    view = await build_feed_view(session, idx, tag_ids=ids or None)
+    view = await build_feed_view(
+        session, idx, tag_ids=ids or None, viewer_user_id=user.id,
+    )
     if view is None:
         await callback.answer("Заявок больше нет", show_alert=True)
         return
@@ -216,41 +257,34 @@ async def on_respond(
 
     await callback.answer("Отклик отправлен! Автор получит уведомление.")
 
-    author = await get_author(session, seeking)
-    if author:
-        name = user.first_name or user.username or "Кто-то"
-        username_part = f" (@{user.username})" if user.username else ""
-        text = (
-            f"🙋 <b>{esc(name)}{esc(username_part)}</b> откликнулся на твою заявку «{esc(seeking.title)}».\n"
-            f"Возраст: {user.age or '—'}\n"
-            f"О себе: {esc(user.bio or '—')}"
-        )
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=f"💬 Написать {esc(name)}",
-                    url=f"tg://user?id={user.telegram_id}",
-                )]
-            ]
-        )
+    # Если у заявки уже есть чат — сразу даём ссылку пользователю
+    # и помечаем отклик как «получил приглашение».
+    if seeking.chat_url:
         try:
-            if user.avatar_file_id:
-                await bot.send_photo(
-                    author.telegram_id,
-                    photo=user.avatar_file_id,
-                    caption=text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=kb,
-                )
-            else:
-                await bot.send_message(
-                    author.telegram_id,
-                    text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=kb,
-                )
+            await bot.send_message(
+                callback.from_user.id,
+                f"💬 Чат заявки «{esc(seeking.title)}»:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="💬 Открыть чат", url=seeking.chat_url)],
+                    ],
+                ),
+                disable_web_page_preview=True,
+            )
         except Exception:
             pass
+        await mark_response_notified(session, seeking_id=seeking_id, user_id=user.id)
+
+    author = await get_author(session, seeking)
+    if author:
+        await notify_actor_about_new_member(
+            bot,
+            recipient_tg_id=author.telegram_id,
+            member=user,
+            entity_title=seeking.title,
+            entity_kind="seeking",
+        )
 
 
 # ──────────────────────────── отклики на заявку (для автора) ─────────────────
@@ -312,11 +346,9 @@ async def on_seeking_close(callback: CallbackQuery, session: AsyncSession) -> No
     if closed:
         await callback.answer("Заявка закрыта.", show_alert=True)
         if callback.message.photo:
-            await callback.message.edit_caption(
-                caption=(callback.message.caption or "") + "\n\n<i>🗑 Заявка закрыта</i>",
-                reply_markup=None,
-                parse_mode=ParseMode.HTML,
-            )
+            # Из профиля — перерисовываем карточку; закрытая заявка
+            # пропадёт из «Мои заявки».
+            await rerender_profile_card(callback.message, session, user)
         else:
             await callback.message.edit_text(
                 (callback.message.text or "Заявка закрыта.") + "\n\n<i>🗑 Заявка закрыта</i>",
@@ -337,7 +369,7 @@ async def on_create_start_cb(callback: CallbackQuery, state: FSMContext) -> None
     await state.set_state(CreateSeekingSG.title)
     await callback.message.answer(
         "Создаём заявку «ищу компанию».\n\n"
-        "<b>Шаг 1/4</b>: коротко — <b>что хочешь сделать?</b>\n"
+        "<b>Шаг 1/5</b>: коротко — <b>что хочешь сделать?</b>\n"
         "Например: «Сходить в кино», «Поиграть в настолки».\n"
         "Отмена: /cancel",
         parse_mode=ParseMode.HTML,
@@ -362,7 +394,7 @@ async def seeking_title(message: Message, state: FSMContext) -> None:
     await state.update_data(title=title)
     await state.set_state(CreateSeekingSG.body)
     await message.answer(
-        "<b>Шаг 2/4</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
+        "<b>Шаг 2/5</b>: расскажи <b>подробнее</b> — когда, с кем, что важно.\n"
         "Можно коротко, можно развёрнуто.",
         parse_mode=ParseMode.HTML,
     )
@@ -386,7 +418,7 @@ async def seeking_body(message: Message, state: FSMContext) -> None:
         ]
     )
     await message.answer(
-        "<b>Шаг 3/4</b>: сколько дней будет актуальна заявка?",
+        "<b>Шаг 3/5</b>: сколько дней будет актуальна заявка?",
         reply_markup=kb,
         parse_mode=ParseMode.HTML,
     )
@@ -396,11 +428,31 @@ CT_S_PREFIX = "ct:s"
 CT_S_TMP_KEY = "create_seeking_tag_ids"
 
 
+async def _render_seeking_tags_step(
+    message: Message,
+    session: AsyncSession,
+    *,
+    selected_ids: set[int],
+) -> None:
+    tags = await list_active_tags(session)
+    kb = tag_picker_keyboard(
+        tags=tags,
+        selected_ids=selected_ids,
+        prefix=CT_S_PREFIX,
+        with_done=True,
+    )
+    await message.answer(
+        "<b>Шаг 5/5</b>: выбери теги (минимум один). "
+        "Нажми на тег, чтобы отметить, и «✅ Готово» когда выберешь.",
+        reply_markup=kb,
+        parse_mode=ParseMode.HTML,
+    )
+
+
 @router.callback_query(F.data.startswith("skd:"), StateFilter(CreateSeekingSG.duration))
 async def seeking_duration(
     callback: CallbackQuery,
     state: FSMContext,
-    session: AsyncSession,
 ) -> None:
     if callback.from_user is None or callback.message is None:
         await callback.answer()
@@ -421,23 +473,60 @@ async def seeking_duration(
         return
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=days)
-    await state.update_data(expires_at_iso=expires_at.isoformat(), **{CT_S_TMP_KEY: []})
-    await state.set_state(CreateSeekingSG.tags)
-
-    tags = await list_active_tags(session)
-    kb = tag_picker_keyboard(
-        tags=tags,
-        selected_ids=set(),
-        prefix=CT_S_PREFIX,
-        with_done=True,
-    )
+    await state.update_data(expires_at_iso=expires_at.isoformat())
+    await state.set_state(CreateSeekingSG.chat_url)
     await callback.message.answer(
-        "<b>Шаг 4/4</b>: выбери теги (минимум один). "
-        "Нажми на тег, чтобы отметить, и «✅ Готово» когда выберешь.",
-        reply_markup=kb,
+        "<b>Шаг 4/5</b>: пришли <b>ссылку на чат заявки</b> "
+        "(например, <code>https://t.me/...</code>), чтобы откликнувшиеся сразу "
+        "могли попасть в обсуждение.\n\n"
+        "Можно пропустить и добавить позже в профиле.",
+        reply_markup=_seeking_chat_url_prompt_kb(),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
+
+
+@router.message(CreateSeekingSG.chat_url, F.text)
+async def seeking_chat_url(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    raw = message.text or ""
+    try:
+        link = normalize_chat_link(raw)
+    except InvalidChatLinkError as e:
+        await message.answer(
+            str(e),
+            reply_markup=_seeking_chat_url_prompt_kb(),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    await state.update_data(chat_url=link, **{CT_S_TMP_KEY: []})
+    await state.set_state(CreateSeekingSG.tags)
+    await _render_seeking_tags_step(message, session, selected_ids=set())
+
+
+@router.callback_query(
+    F.data == CS_CHAT_SKIP_CB,
+    StateFilter(CreateSeekingSG.chat_url),
+)
+async def seeking_chat_url_skip(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    await state.update_data(chat_url=None, **{CT_S_TMP_KEY: []})
+    await state.set_state(CreateSeekingSG.tags)
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await _render_seeking_tags_step(callback.message, session, selected_ids=set())
+    await callback.answer("Пропущено — можно добавить позже в профиле")
 
 
 @router.callback_query(
@@ -494,6 +583,7 @@ async def seeking_tags_done(
     title = data.get("title")
     body = data.get("body")
     expires_raw = data.get("expires_at_iso")
+    chat_url = data.get("chat_url")
     if not title or not body or not expires_raw:
         await state.clear()
         await callback.message.answer(
@@ -512,6 +602,7 @@ async def seeking_tags_done(
         title=title,
         body=body,
         expires_at=expires_at,
+        chat_url=chat_url,
         tag_ids=tag_ids,
     )
     await state.clear()
