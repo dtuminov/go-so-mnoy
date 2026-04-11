@@ -12,7 +12,15 @@ class City {
 class User {
   +id : int
   +telegram_id : bigint
+  +username : string?
+  +first_name : string?
+  +last_name : string?
+  +avatar_file_id : string?
+  +age : int?
+  +bio : text?
+  +search_prefs : jsonb?
   +created_at : datetime
+  +updated_at : datetime?
 }
 
 class Event {
@@ -23,7 +31,10 @@ class Event {
   +description : text
   +starts_at : datetime
   +place_text : string
+  +chat_url : string?
   +status : string
+  +published_notified : bool
+  +reminder_sent : bool
   +created_at : datetime
 }
 
@@ -32,7 +43,10 @@ class EventParticipant {
   +event_id : int
   +user_id : int
   +status : string
+  +chat_invite_notified : bool
   +created_at : datetime
+  --
+  unique(event_id, user_id)
 }
 
 class CompanySeeking {
@@ -42,7 +56,9 @@ class CompanySeeking {
   +title : string
   +body : text
   +expires_at : datetime
+  +chat_url : string?
   +status : string
+  +published_notified : bool
   +created_at : datetime
 }
 
@@ -50,16 +66,33 @@ class CompanySeekingResponse {
   +id : int
   +seeking_id : int
   +user_id : int
+  +chat_invite_notified : bool
   +created_at : datetime
+  --
+  unique(seeking_id, user_id)
+}
+
+class Tag {
+  +id : int
+  +slug : string
+  +name : string
+  +emoji : string
+  +sort_order : int
+  +is_active : bool
 }
 
 City "1" --> "*" Event : city
 City "1" --> "*" CompanySeeking : city
+
 User "1" --> "*" Event : organizes
 User "1" --> "*" EventParticipant : member
 User "1" --> "*" CompanySeeking : author
 User "1" --> "*" CompanySeekingResponse : responder
+
 Event "1" --> "*" EventParticipant : participants
 CompanySeeking "1" --> "*" CompanySeekingResponse : responses
+
+Event "*" -- "*" Tag : event_tags
+CompanySeeking "*" -- "*" Tag : seeking_tags
 
 @enduml
