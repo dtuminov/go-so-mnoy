@@ -6,6 +6,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bot.db.base import Base
+from bot.models.associations import event_tags
 
 
 class Event(Base):
@@ -35,4 +36,8 @@ class Event(Base):
     participants: Mapped[list["EventParticipant"]] = relationship(
         back_populates="event",
         cascade="all, delete-orphan",
+    )
+    tags: Mapped[list["Tag"]] = relationship(
+        secondary=event_tags,
+        order_by="Tag.sort_order",
     )
