@@ -11,19 +11,13 @@ from aiogram.types import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import ACTIVITY_EVENT, ACTIVITY_SEEKING
-from bot.handlers.activity_create import (
-    CreateEventSG,
-    _start_seeking_creation,
-)
+from bot.handlers.activity_create import start_create_activity
 from bot.handlers.profile import begin_profile_flow
 from bot.keyboards.main_menu import (
-    BTN_CANCEL,
-    BTN_CREATE_EVENT,
-    BTN_CREATE_SEEKING,
+    BTN_CREATE_ACTIVITY,
     BTN_FIND_COMPANY,
     BTN_FIND_EVENTS,
     BTN_MY_PROFILE,
-    cancel_keyboard,
 )
 from bot.services.activity_feed import build_activity_feed_view
 from bot.services.profile_view import build_profile_view
@@ -114,15 +108,8 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
     )
 
 
-@router.message(F.text == BTN_CREATE_EVENT, StateFilter(default_state))
-async def on_create_event_entry(message: Message, state: FSMContext) -> None:
-    await state.set_state(CreateEventSG.title)
-    await message.answer(
-        "Создаём событие. Шаг 1/6: <b>название</b> (до 120 символов).",
-        reply_markup=cancel_keyboard(),
-    )
-
-
-@router.message(F.text == BTN_CREATE_SEEKING, StateFilter(default_state))
-async def on_create_seeking_entry(message: Message, state: FSMContext) -> None:
-    await _start_seeking_creation(message, state)
+@router.message(F.text == BTN_CREATE_ACTIVITY, StateFilter(default_state))
+async def on_create_activity_entry(message: Message, state: FSMContext) -> None:
+    """Единая точка входа в создание активности — kind выбирается
+    inline-кнопками внутри `start_create_activity`."""
+    await start_create_activity(message, state)
