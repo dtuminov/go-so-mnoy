@@ -84,6 +84,12 @@ async def on_profile_hub(
 # ──────────────────────────── section list ──────────────────────────────────
 
 
+@router.callback_query(F.data == "prf:noop")
+async def on_profile_noop(callback: CallbackQuery) -> None:
+    """Пустой callback для центральной кнопки пагинации «N/M»."""
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("prf:sec:"))
 async def on_profile_section(
     callback: CallbackQuery,
@@ -92,17 +98,26 @@ async def on_profile_section(
     if callback.from_user is None:
         await callback.answer()
         return
-    try:
-        section = callback.data.split(":", 2)[2]
-    except IndexError:
+    # Формат: prf:sec:<section>[:<page>]
+    parts = callback.data.split(":")
+    if len(parts) < 3:
         await callback.answer("Некорректные данные", show_alert=True)
         return
+    section = parts[2]
     if section not in _KNOWN_SECTIONS:
         await callback.answer("Неизвестный раздел", show_alert=True)
         return
+    page = 0
+    if len(parts) >= 4:
+        try:
+            page = int(parts[3])
+        except ValueError:
+            page = 0
 
     user = await upsert_telegram_user(session, callback.from_user)
-    text, kb = await build_section_view(session, user, section=section)
+    text, kb = await build_section_view(
+        session, user, section=section, page=page,
+    )
     await _edit_caption_or_text(callback, text=text, reply_markup=kb)
     await callback.answer()
 
@@ -118,14 +133,15 @@ async def on_profile_activity(
     if callback.from_user is None:
         await callback.answer()
         return
-    # Формат: prf:act:<section>:<id>
-    parts = callback.data.split(":", 3)
-    if len(parts) < 4:
+    # Формат: prf:act:<section>:<page>:<id>
+    parts = callback.data.split(":")
+    if len(parts) < 5:
         await callback.answer("Некорректные данные", show_alert=True)
         return
     section = parts[2]
     try:
-        activity_id = int(parts[3])
+        page = int(parts[3])
+        activity_id = int(parts[4])
     except ValueError:
         await callback.answer("Некорректные данные", show_alert=True)
         return
@@ -139,11 +155,14 @@ async def on_profile_activity(
         user,
         activity_id=activity_id,
         from_section=section,
+        from_page=page,
     )
     if view is None:
         await callback.answer("Активность не найдена", show_alert=True)
         # Откатываемся к списку — там она тоже пропадёт.
-        text, kb = await build_section_view(session, user, section=section)
+        text, kb = await build_section_view(
+            session, user, section=section, page=page,
+        )
         await _edit_caption_or_text(callback, text=text, reply_markup=kb)
         return
     text, kb = view

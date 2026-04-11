@@ -41,6 +41,11 @@ SECTION_CREATED = "cre"
 SECTION_INCOMING_PENDING = "incp"  # заявки ждут моего решения
 SECTION_OUTGOING_PENDING = "outp"  # я жду решения
 
+# Размер страницы списка в секции профиля. Текст и кнопки рендерятся
+# батчем по `SECTION_PAGE_SIZE` элементов, навигация между страницами —
+# отдельным рядом [← Назад] [N/M] [Далее →] под кнопками активностей.
+SECTION_PAGE_SIZE = 5
+
 
 # ──────────────────────────── helpers ───────────────────────────────────────
 
@@ -180,11 +185,13 @@ async def build_section_view(
     user: User,
     *,
     section: str,
+    page: int = 0,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    """Список активностей внутри выбранного раздела.
-
-    Один ряд на активность — inline-кнопка с коротким названием, клик
-    ведёт в детали (`prf:act:<section>:<id>`).
+    """Список активностей внутри выбранного раздела с пагинацией по
+    `SECTION_PAGE_SIZE` элементов. Один ряд на активность — inline-
+    кнопка с коротким названием, клик ведёт в детали
+    (`prf:act:<section>:<page>:<id>`). Под кнопками — ряд
+    [← Назад] [N/M] [Далее →], если страниц больше одной.
     """
     if section == SECTION_PARTICIPATING:
         title = "🎫 Я участвую"
@@ -207,35 +214,67 @@ async def build_section_view(
     else:
         title = "Неизвестный раздел"
         activities = []
-        empty = empty_hint = ""
+        empty = ""
 
-    lines = [f"<b>{title}</b>"]
+    total = len(activities)
+    total_pages = max(1, (total + SECTION_PAGE_SIZE - 1) // SECTION_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * SECTION_PAGE_SIZE
+    end = start + SECTION_PAGE_SIZE
+    page_items = activities[start:end]
+
+    # ── текст ───────────────────────────────────────────────────────────────
+    header = f"<b>{title}</b>"
+    if total_pages > 1:
+        header += f"  ·  стр. {page + 1}/{total_pages}"
+    lines = [header]
     if not activities:
         lines += ["", f"<i>{empty}</i>"]
     else:
         lines.append("")
-        for i, act in enumerate(activities, 1):
+        for offset, act in enumerate(page_items):
+            absolute_idx = start + offset + 1
             icon = _kind_icon(act)
             vis = _visibility_mark(act)
             when = _when_line(act)
-            extras = []
+            extras: list[str] = []
             if section == SECTION_INCOMING_PENDING:
                 n = await count_pending_members(session, act.id)
                 extras.append(f"⏳ {n}")
             lines.append(
-                f"{i}. {icon} {esc(act.title)}{vis} — {when}"
+                f"{absolute_idx}. {icon} {esc(act.title)}{vis} — {when}"
                 + (f"  ·  {' · '.join(extras)}" if extras else "")
             )
 
+    # ── клавиатура ──────────────────────────────────────────────────────────
     rows: list[list[InlineKeyboardButton]] = []
-    for act in activities:
+    for act in page_items:
         icon = _kind_icon(act)
         label = f"{icon} {_trim(act.title, 24)}"
         rows.append([InlineKeyboardButton(
             text=label,
-            callback_data=f"prf:act:{section}:{act.id}",
+            callback_data=f"prf:act:{section}:{page}:{act.id}",
         )])
-    rows.append(_back_row("prf:hub"))
+
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=f"prf:sec:{section}:{page - 1}",
+            ))
+        nav.append(InlineKeyboardButton(
+            text=f"{page + 1}/{total_pages}",
+            callback_data="prf:noop",
+        ))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(
+                text="Далее ➡️",
+                callback_data=f"prf:sec:{section}:{page + 1}",
+            ))
+        rows.append(nav)
+
+    rows.append(_back_row("prf:hub", label="↩️ В меню"))
 
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -297,6 +336,7 @@ async def build_activity_detail_view(
     *,
     activity_id: int,
     from_section: str,
+    from_page: int = 0,
 ) -> tuple[str, InlineKeyboardMarkup] | None:
     """Экран деталей одной активности в контексте профиля.
 
@@ -354,7 +394,7 @@ async def build_activity_detail_view(
             InlineKeyboardButton(text="↩️ Отозвать заявку", callback_data=f"al:{activity.id}"),
         ])
 
-    rows.append(_back_row(f"prf:sec:{from_section}"))
+    rows.append(_back_row(f"prf:sec:{from_section}:{from_page}"))
 
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
