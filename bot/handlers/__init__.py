@@ -1,11 +1,10 @@
 from aiogram import Router
 
 from bot.handlers import (
+    activity,
+    activity_chat,
+    activity_create,
     common,
-    company_seeking,
-    create_event,
-    event_chat,
-    events,
     filters,
     menu,
     profile,
@@ -13,10 +12,9 @@ from bot.handlers import (
 
 router = Router()
 router.include_router(profile.router)
-router.include_router(event_chat.router)
-router.include_router(company_seeking.router)
-router.include_router(create_event.router)
-router.include_router(events.router)
+router.include_router(activity_chat.router)
+router.include_router(activity_create.router)
+router.include_router(activity.router)
 router.include_router(filters.router)
 router.include_router(menu.router)
 router.include_router(common.router)

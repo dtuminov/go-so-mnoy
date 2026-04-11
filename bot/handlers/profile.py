@@ -8,17 +8,15 @@ from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.constants import EVENT_PUBLISHED, SEEKING_PUBLISHED
+from bot.constants import ACTIVITY_EVENT, ACTIVITY_PUBLISHED
 from bot.keyboards.main_menu import main_menu_reply
-from bot.services.company_seeking import get_seeking, user_responded
-from bot.services.events import get_event, user_joined_event
+from bot.services.activities import get_activity, join_activity
 from bot.services.users import update_user_profile, upsert_user_from_message
 from bot.utils.formatting import esc
 
 router = Router(name="profile")
 
-PENDING_JOIN_KEY = "pending_join_event_id"
-PENDING_SEEK_KEY = "pending_seek_id"
+PENDING_ACTIVITY_KEY = "pending_join_activity_id"
 CB_EDIT_PROFILE = "profile:edit"
 
 
@@ -28,11 +26,11 @@ class ProfileSG(StatesGroup):
     bio = State()
 
 
-def _welcome_text(*, event_title: str | None, editing: bool = False) -> str:
+def _welcome_text(*, activity_title: str | None, editing: bool = False) -> str:
     if editing:
         prefix = "Обновляем анкету.\n\n"
-    elif event_title:
-        prefix = f"Событие «{esc(event_title)}» — после анкеты запишем автоматически.\n\n"
+    elif activity_title:
+        prefix = f"«{esc(activity_title)}» — после анкеты подадим заявку автоматически.\n\n"
     else:
         prefix = "Чтобы участвовать во встречах, заполни <b>анкету</b>.\n\n"
     return (
@@ -46,26 +44,32 @@ async def begin_profile_flow(
     target_message: Message,
     state: FSMContext,
     *,
-    pending_event_id: int | None,
-    pending_seeking_id: int | None = None,
-    event_title: str | None = None,
+    pending_event_id: int | None = None,
+    pending_seeking_id: int | None = None,  # backward-compat для существующих хэндлеров
+    activity_title: str | None = None,
     editing: bool = False,
 ) -> None:
+    """Стартует FSM анкеты.
+
+    Параметры `pending_event_id` / `pending_seeking_id` оставлены ради
+    обратной совместимости с прежним API; внутри они мерджатся в общий
+    `pending_join_activity_id`.
+    """
     await state.clear()
     await state.set_state(ProfileSG.avatar)
     data: dict = {"editing": editing}
-    if pending_event_id is not None:
-        data[PENDING_JOIN_KEY] = pending_event_id
-    if pending_seeking_id is not None:
-        data[PENDING_SEEK_KEY] = pending_seeking_id
+    pending = pending_event_id if pending_event_id is not None else pending_seeking_id
+    if pending is not None:
+        data[PENDING_ACTIVITY_KEY] = pending
     await state.update_data(data)
     await target_message.answer(
-        _welcome_text(event_title=event_title, editing=editing),
+        _welcome_text(activity_title=activity_title, editing=editing),
         parse_mode=ParseMode.HTML,
     )
 
 
 # ── edit callback (из карточки профиля) ──────────────────────────────────────
+
 
 @router.callback_query(F.data == CB_EDIT_PROFILE, StateFilter(default_state))
 async def on_edit_profile_cb(callback: CallbackQuery, state: FSMContext) -> None:
@@ -73,10 +77,11 @@ async def on_edit_profile_cb(callback: CallbackQuery, state: FSMContext) -> None
         await callback.answer()
         return
     await callback.answer()
-    await begin_profile_flow(callback.message, state, pending_event_id=None, editing=True)
+    await begin_profile_flow(callback.message, state, editing=True)
 
 
 # ── /cancel внутри анкеты ────────────────────────────────────────────────────
+
 
 @router.message(Command("cancel"), StateFilter(ProfileSG))
 async def profile_cancel(message: Message, state: FSMContext) -> None:
@@ -91,6 +96,7 @@ async def profile_cancel(message: Message, state: FSMContext) -> None:
 
 
 # ── шаги FSM ─────────────────────────────────────────────────────────────────
+
 
 @router.message(ProfileSG.avatar, F.photo)
 async def profile_avatar(message: Message, state: FSMContext) -> None:
@@ -108,7 +114,10 @@ async def profile_avatar(message: Message, state: FSMContext) -> None:
 
 @router.message(ProfileSG.avatar)
 async def profile_avatar_wrong(message: Message) -> None:
-    await message.answer("Сейчас нужно именно <b>фото</b>. Отправь одно изображение.", parse_mode=ParseMode.HTML)
+    await message.answer(
+        "Сейчас нужно именно <b>фото</b>. Отправь одно изображение.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(ProfileSG.age, F.text)
@@ -168,7 +177,7 @@ async def profile_bio_finish(
         bio=bio,
     )
 
-    pending = data.get(PENDING_JOIN_KEY)
+    pending = data.get(PENDING_ACTIVITY_KEY)
     editing = data.get("editing", False)
     await state.clear()
 
@@ -176,42 +185,33 @@ async def profile_bio_finish(
         await message.answer("Профиль обновлён.", reply_markup=main_menu_reply())
         return
 
-    text = "Готово — профиль сохранён. Дальше запись на события в один клик."
+    text = "Готово — профиль сохранён. Дальше запись в один клик."
 
-    # авто-запись на событие
-    pending_event = data.get(PENDING_JOIN_KEY)
-    if pending_event is not None:
+    # Авто-вступление в активность, на которую кликали до анкеты.
+    if pending is not None:
         try:
-            eid = int(pending_event)
+            aid = int(pending)
         except (TypeError, ValueError):
-            eid = None
-        if eid is not None:
-            event = await get_event(session, eid)
-            if event is not None and event.status == EVENT_PUBLISHED:
-                joined = await user_joined_event(session, event_id=eid, user_id=user.id)
-                if joined:
-                    text += f"\n\n✅ Ты в списке участников «{esc(event.title)}»."
-                else:
-                    text += "\n\nПо этому событию ты уже в списке — всё ок."
+            aid = None
+        if aid is not None:
+            activity = await get_activity(session, aid)
+            if activity is not None and activity.status == ACTIVITY_PUBLISHED:
+                _, action = await join_activity(
+                    session, activity=activity, user_id=user.id,
+                )
+                if action == "created_joined":
+                    if activity.kind == ACTIVITY_EVENT:
+                        text += f"\n\n✅ Ты в списке участников «{esc(activity.title)}»."
+                    else:
+                        text += f"\n\n✅ Отклик на заявку «{esc(activity.title)}» отправлен автору."
+                elif action == "created_pending":
+                    text += (
+                        f"\n\n⏳ Заявка на «{esc(activity.title)}» отправлена. "
+                        "Ждём подтверждения организатора."
+                    )
+                else:  # already
+                    text += "\n\nТы уже в списке — всё ок."
             else:
-                text += "\n\nЭто событие уже недоступно — выбери другое в ленте."
-
-    # авто-отклик на заявку «найти компанию»
-    pending_seek = data.get(PENDING_SEEK_KEY)
-    if pending_seek is not None:
-        try:
-            sid = int(pending_seek)
-        except (TypeError, ValueError):
-            sid = None
-        if sid is not None:
-            seeking = await get_seeking(session, sid)
-            if seeking is not None and seeking.status == SEEKING_PUBLISHED:
-                responded = await user_responded(session, seeking_id=sid, user_id=user.id)
-                if responded:
-                    text += f"\n\n✅ Отклик на заявку «{esc(seeking.title)}» отправлен автору."
-                else:
-                    text += "\n\nПо этой заявке ты уже откликнулся — всё ок."
-            else:
-                text += "\n\nЭта заявка уже недоступна — выбери другую в разделе «🤝 Найти компанию»."
+                text += "\n\nЭто уже недоступно — выбери другое."
 
     await message.answer(text, reply_markup=main_menu_reply())

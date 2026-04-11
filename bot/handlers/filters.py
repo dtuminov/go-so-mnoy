@@ -1,12 +1,16 @@
-"""Фильтры лент по тегам (события и «ищу компанию»).
+"""Фильтры лент по тегам.
 
-Пикер открывается из ленты по кнопке «🔎 Фильтры». Временный выбор пользователя
-хранится в FSM data под отдельными ключами, которые не пересекаются с FSM
-создания события / заявки / анкеты — поэтому пикер не переводит пользователя
-в собственный State и не ломает чужие flow.
+Поскольку у нас визуально две ленты — «Найти событие» (kind='event') и
+«Найти компанию» (kind='seeking') — фильтры тоже разделены на два набора:
+`tp:e:*` / `tp:s:*`. Соответствие kind ↔ namespace инкапсулировано в
+константах ниже.
 
-Сохраняем финальный выбор в `users.search_prefs` (JSONB) — он живёт между
-рестартами и между FSM-переключениями.
+Пикер не переводит пользователя в собственный State — временный выбор
+живёт в FSM data под отдельными ключами, не пересекающимися с FSM
+создания / анкеты / редактирования чата.
+
+Финальный выбор сохраняется в `users.search_prefs` (JSONB) — переживает
+рестарты и сброс FSM.
 """
 
 from __future__ import annotations
@@ -17,9 +21,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.handlers.company_seeking import build_feed_view as build_seeking_feed_view
+from bot.constants import ACTIVITY_EVENT, ACTIVITY_SEEKING
 from bot.keyboards.tag_picker import tag_picker_keyboard
-from bot.services.event_feed import build_event_feed_view
+from bot.services.activity_feed import build_activity_feed_view
 from bot.services.search_prefs import (
     get_event_tag_filter,
     get_seeking_tag_filter,
@@ -32,7 +36,6 @@ from bot.services.users import upsert_telegram_user
 router = Router(name="filters")
 
 
-# Ключи временного выбора в FSM data — не пересекаются с create_event / profile / seeking.
 TMP_EVENT_KEY = "filter_tmp_event_tag_ids"
 TMP_SEEKING_KEY = "filter_tmp_seeking_tag_ids"
 
@@ -77,33 +80,52 @@ async def _render_picker(
                 text, reply_markup=kb, parse_mode=ParseMode.HTML,
             )
         except Exception:
-            # Исходное сообщение могло быть с фото/без edit_text — шлём новое.
             await callback.message.answer(
                 text, reply_markup=kb, parse_mode=ParseMode.HTML,
             )
 
 
-# ──────────────────────────── EVENTS: open / toggle / apply / clear ──────────
+async def _render_feed_after(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    *,
+    user,
+    kind: str,
+    tag_ids: list[int],
+    empty_hint: str,
+) -> None:
+    if callback.message is None:
+        return
+    view = await build_activity_feed_view(
+        session,
+        kind=kind,
+        index=0,
+        tag_ids=tag_ids or None,
+        viewer_user_id=user.id,
+    )
+    if view is None:
+        await callback.message.edit_text(empty_hint, parse_mode=ParseMode.HTML)
+        return
+    text, kb = view
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+
+
+# ──────────────────────────── EVENTS feed: tp:e:* ────────────────────────────
 
 
 @router.callback_query(F.data == "tp:e:open")
 async def on_events_filter_open(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     if callback.from_user is None:
         await callback.answer()
         return
     user = await upsert_telegram_user(session, callback.from_user)
-    # Стартуем временный выбор из уже сохранённого в БД фильтра.
     current = set(get_event_tag_filter(user))
     await _save_tmp_ids(state, TMP_EVENT_KEY, current)
     await _render_picker(
-        callback,
-        session,
-        prefix="tp:e",
-        selected_ids=current,
+        callback, session,
+        prefix="tp:e", selected_ids=current,
         title="🔎 Фильтр ленты событий",
     )
     await callback.answer()
@@ -111,9 +133,7 @@ async def on_events_filter_open(
 
 @router.callback_query(F.data.startswith("tp:e:t:"))
 async def on_events_filter_toggle(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     try:
         tag_id = int(callback.data.split(":", 3)[3])
@@ -128,12 +148,8 @@ async def on_events_filter_toggle(
     await _save_tmp_ids(state, TMP_EVENT_KEY, current)
     tags = await list_active_tags(session)
     kb = tag_picker_keyboard(
-        tags=tags,
-        selected_ids=current,
-        prefix="tp:e",
-        with_apply=True,
-        with_clear=True,
-        with_cancel=True,
+        tags=tags, selected_ids=current, prefix="tp:e",
+        with_apply=True, with_clear=True, with_cancel=True,
     )
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -142,19 +158,13 @@ async def on_events_filter_toggle(
 
 @router.callback_query(F.data == "tp:e:clear")
 async def on_events_filter_clear(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     await _save_tmp_ids(state, TMP_EVENT_KEY, set())
     tags = await list_active_tags(session)
     kb = tag_picker_keyboard(
-        tags=tags,
-        selected_ids=set(),
-        prefix="tp:e",
-        with_apply=True,
-        with_clear=True,
-        with_cancel=True,
+        tags=tags, selected_ids=set(), prefix="tp:e",
+        with_apply=True, with_clear=True, with_cancel=True,
     )
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -163,9 +173,7 @@ async def on_events_filter_clear(
 
 @router.callback_query(F.data == "tp:e:apply")
 async def on_events_filter_apply(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     if callback.from_user is None or callback.message is None:
         await callback.answer()
@@ -174,31 +182,16 @@ async def on_events_filter_apply(
     ids = sorted(await _tmp_ids(state, TMP_EVENT_KEY))
     await set_event_tag_filter(session, user=user, tag_ids=ids)
     await state.update_data({TMP_EVENT_KEY: None})
-
-    view = await build_event_feed_view(
-        session,
-        index=0,
-        tag_ids=ids or None,
-        viewer_user_id=user.id,
+    await _render_feed_after(
+        callback, session, user=user, kind=ACTIVITY_EVENT, tag_ids=ids,
+        empty_hint="По выбранным тегам нет событий. Сбрось фильтр и попробуй снова.",
     )
-    if view is None:
-        await callback.message.edit_text(
-            "По выбранным тегам нет событий. "
-            "Сбрось фильтр и попробуй снова.",
-            parse_mode=ParseMode.HTML,
-        )
-        await callback.answer()
-        return
-    text, kb = view
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await callback.answer("Фильтр применён")
 
 
 @router.callback_query(F.data == "tp:e:cancel")
 async def on_events_filter_cancel(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     if callback.from_user is None or callback.message is None:
         await callback.answer()
@@ -206,29 +199,19 @@ async def on_events_filter_cancel(
     await state.update_data({TMP_EVENT_KEY: None})
     user = await upsert_telegram_user(session, callback.from_user)
     ids = get_event_tag_filter(user)
-    view = await build_event_feed_view(
-        session, index=0, tag_ids=ids or None, viewer_user_id=user.id,
+    await _render_feed_after(
+        callback, session, user=user, kind=ACTIVITY_EVENT, tag_ids=ids,
+        empty_hint="Сейчас событий нет. Загляни позже.",
     )
-    if view is None:
-        await callback.message.edit_text(
-            "Сейчас событий нет. Загляни позже.",
-            parse_mode=ParseMode.HTML,
-        )
-        await callback.answer()
-        return
-    text, kb = view
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await callback.answer()
 
 
-# ──────────────────────────── SEEKINGS: open / toggle / apply / clear ────────
+# ──────────────────────────── SEEKINGS feed: tp:s:* ──────────────────────────
 
 
 @router.callback_query(F.data == "tp:s:open")
 async def on_seekings_filter_open(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     if callback.from_user is None:
         await callback.answer()
@@ -237,10 +220,8 @@ async def on_seekings_filter_open(
     current = set(get_seeking_tag_filter(user))
     await _save_tmp_ids(state, TMP_SEEKING_KEY, current)
     await _render_picker(
-        callback,
-        session,
-        prefix="tp:s",
-        selected_ids=current,
+        callback, session,
+        prefix="tp:s", selected_ids=current,
         title="🔎 Фильтр заявок «ищу компанию»",
     )
     await callback.answer()
@@ -248,9 +229,7 @@ async def on_seekings_filter_open(
 
 @router.callback_query(F.data.startswith("tp:s:t:"))
 async def on_seekings_filter_toggle(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     try:
         tag_id = int(callback.data.split(":", 3)[3])
@@ -265,12 +244,8 @@ async def on_seekings_filter_toggle(
     await _save_tmp_ids(state, TMP_SEEKING_KEY, current)
     tags = await list_active_tags(session)
     kb = tag_picker_keyboard(
-        tags=tags,
-        selected_ids=current,
-        prefix="tp:s",
-        with_apply=True,
-        with_clear=True,
-        with_cancel=True,
+        tags=tags, selected_ids=current, prefix="tp:s",
+        with_apply=True, with_clear=True, with_cancel=True,
     )
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -279,19 +254,13 @@ async def on_seekings_filter_toggle(
 
 @router.callback_query(F.data == "tp:s:clear")
 async def on_seekings_filter_clear(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     await _save_tmp_ids(state, TMP_SEEKING_KEY, set())
     tags = await list_active_tags(session)
     kb = tag_picker_keyboard(
-        tags=tags,
-        selected_ids=set(),
-        prefix="tp:s",
-        with_apply=True,
-        with_clear=True,
-        with_cancel=True,
+        tags=tags, selected_ids=set(), prefix="tp:s",
+        with_apply=True, with_clear=True, with_cancel=True,
     )
     if callback.message is not None:
         await callback.message.edit_reply_markup(reply_markup=kb)
@@ -300,9 +269,7 @@ async def on_seekings_filter_clear(
 
 @router.callback_query(F.data == "tp:s:apply")
 async def on_seekings_filter_apply(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     if callback.from_user is None or callback.message is None:
         await callback.answer()
@@ -311,28 +278,16 @@ async def on_seekings_filter_apply(
     ids = sorted(await _tmp_ids(state, TMP_SEEKING_KEY))
     await set_seeking_tag_filter(session, user=user, tag_ids=ids)
     await state.update_data({TMP_SEEKING_KEY: None})
-
-    view = await build_seeking_feed_view(
-        session, 0, tag_ids=ids or None, viewer_user_id=user.id,
+    await _render_feed_after(
+        callback, session, user=user, kind=ACTIVITY_SEEKING, tag_ids=ids,
+        empty_hint="По выбранным тегам нет активных заявок. Сбрось фильтр и попробуй снова.",
     )
-    if view is None:
-        await callback.message.edit_text(
-            "По выбранным тегам нет активных заявок. "
-            "Сбрось фильтр и попробуй снова.",
-            parse_mode=ParseMode.HTML,
-        )
-        await callback.answer()
-        return
-    text, kb = view
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await callback.answer("Фильтр применён")
 
 
 @router.callback_query(F.data == "tp:s:cancel")
 async def on_seekings_filter_cancel(
-    callback: CallbackQuery,
-    session: AsyncSession,
-    state: FSMContext,
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
 ) -> None:
     if callback.from_user is None or callback.message is None:
         await callback.answer()
@@ -340,16 +295,8 @@ async def on_seekings_filter_cancel(
     await state.update_data({TMP_SEEKING_KEY: None})
     user = await upsert_telegram_user(session, callback.from_user)
     ids = get_seeking_tag_filter(user)
-    view = await build_seeking_feed_view(
-        session, 0, tag_ids=ids or None, viewer_user_id=user.id,
+    await _render_feed_after(
+        callback, session, user=user, kind=ACTIVITY_SEEKING, tag_ids=ids,
+        empty_hint="Сейчас заявок нет. Загляни позже.",
     )
-    if view is None:
-        await callback.message.edit_text(
-            "Сейчас заявок нет. Загляни позже.",
-            parse_mode=ParseMode.HTML,
-        )
-        await callback.answer()
-        return
-    text, kb = view
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     await callback.answer()

@@ -4,17 +4,20 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.types import (
-    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.handlers.company_seeking import CreateSeekingSG, _start_seeking_creation, build_feed_view
-from bot.handlers.create_event import CreateEventSG
-from bot.handlers.profile import ProfileSG, begin_profile_flow
+from bot.constants import ACTIVITY_EVENT, ACTIVITY_SEEKING
+from bot.handlers.activity_create import (
+    CreateEventSG,
+    _start_seeking_creation,
+)
+from bot.handlers.profile import begin_profile_flow
 from bot.keyboards.main_menu import (
+    BTN_CANCEL,
     BTN_CREATE_EVENT,
     BTN_CREATE_SEEKING,
     BTN_FIND_COMPANY,
@@ -22,11 +25,13 @@ from bot.keyboards.main_menu import (
     BTN_MY_PROFILE,
     cancel_keyboard,
 )
-from bot.services.company_seeking import remove_user_response
-from bot.services.event_feed import build_event_feed_view
-from bot.services.profile_view import build_profile_view, rerender_profile_card
-from bot.services.search_prefs import get_event_tag_filter, get_seeking_tag_filter
-from bot.services.users import is_profile_complete, upsert_telegram_user, upsert_user_from_message
+from bot.services.activity_feed import build_activity_feed_view
+from bot.services.profile_view import build_profile_view
+from bot.services.search_prefs import (
+    get_event_tag_filter,
+    get_seeking_tag_filter,
+)
+from bot.services.users import is_profile_complete, upsert_user_from_message
 
 router = Router(name="menu")
 
@@ -35,14 +40,18 @@ router = Router(name="menu")
 async def on_find_events(message: Message, session: AsyncSession) -> None:
     user = await upsert_user_from_message(session, message)
     ids = get_event_tag_filter(user)
-    view = await build_event_feed_view(
-        session, index=0, tag_ids=ids or None, viewer_user_id=user.id,
+    view = await build_activity_feed_view(
+        session,
+        kind=ACTIVITY_EVENT,
+        index=0,
+        tag_ids=ids or None,
+        viewer_user_id=user.id,
     )
     if view is None:
         hint = (
-            "По выбранным тегам событий нет. Нажми «🔎 Фильтры» в ленте и сбрось."
+            "По выбранным тегам событий нет. Нажми «🔎 Фильтры» и сбрось."
             if ids
-            else "Пока нет опубликованных событий в Москве. Загляни позже или создай своё — «➕ Создать событие»."
+            else "Пока нет опубликованных событий в Москве. Загляни позже или создай своё."
         )
         await message.answer(hint)
         return
@@ -54,8 +63,12 @@ async def on_find_events(message: Message, session: AsyncSession) -> None:
 async def on_find_company(message: Message, session: AsyncSession) -> None:
     user = await upsert_user_from_message(session, message)
     ids = get_seeking_tag_filter(user)
-    view = await build_feed_view(
-        session, 0, tag_ids=ids or None, viewer_user_id=user.id,
+    view = await build_activity_feed_view(
+        session,
+        kind=ACTIVITY_SEEKING,
+        index=0,
+        tag_ids=ids or None,
+        viewer_user_id=user.id,
     )
     if view is None:
         await message.answer(
@@ -70,7 +83,7 @@ async def on_find_company(message: Message, session: AsyncSession) -> None:
 async def on_my_profile(message: Message, session: AsyncSession, state: FSMContext) -> None:
     user = await upsert_user_from_message(session, message)
     if not is_profile_complete(user):
-        await begin_profile_flow(message, state, pending_event_id=None)
+        await begin_profile_flow(message, state)
         return
 
     text, kb = await build_profile_view(session, user)
@@ -80,29 +93,6 @@ async def on_my_profile(message: Message, session: AsyncSession, state: FSMConte
         reply_markup=kb,
         parse_mode=ParseMode.HTML,
     )
-
-
-@router.callback_query(F.data.startswith("srd:"))
-async def on_remove_response(callback: CallbackQuery, session: AsyncSession) -> None:
-    if callback.from_user is None or callback.message is None:
-        await callback.answer()
-        return
-    try:
-        seeking_id = int(callback.data.split(":", 1)[1])
-    except (IndexError, ValueError):
-        await callback.answer("Ошибка данных", show_alert=True)
-        return
-
-    user = await upsert_telegram_user(session, callback.from_user)
-    removed = await remove_user_response(
-        session, seeking_id=seeking_id, user_id=user.id,
-    )
-    if not removed:
-        await callback.answer("Отклика уже нет.", show_alert=False)
-        return
-
-    await callback.answer("Отклик убран.")
-    await rerender_profile_card(callback.message, session, user)
 
 
 @router.message(F.text == BTN_CREATE_EVENT, StateFilter(default_state))
