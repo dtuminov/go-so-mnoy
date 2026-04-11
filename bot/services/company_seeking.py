@@ -85,6 +85,20 @@ async def user_responded(
     return True
 
 
+async def is_user_responded_seeking(
+    session: AsyncSession,
+    *,
+    seeking_id: int,
+    user_id: int,
+) -> bool:
+    result = await session.execute(
+        select(CompanySeekingResponse.id)
+        .where(CompanySeekingResponse.seeking_id == seeking_id)
+        .where(CompanySeekingResponse.user_id == user_id),
+    )
+    return result.first() is not None
+
+
 async def close_seeking(
     session: AsyncSession,
     *,
@@ -171,6 +185,7 @@ async def create_seeking_draft(
     title: str,
     body: str,
     expires_at: datetime,
+    chat_url: str | None = None,
     tag_ids: list[int] | None = None,
 ) -> CompanySeeking:
     seeking = CompanySeeking(
@@ -179,6 +194,7 @@ async def create_seeking_draft(
         title=title,
         body=body,
         expires_at=expires_at,
+        chat_url=chat_url,
         status="pending_review",
     )
     session.add(seeking)
@@ -190,3 +206,29 @@ async def create_seeking_draft(
             )
         )
     return seeking
+
+
+async def update_seeking_chat_url(
+    session: AsyncSession,
+    *,
+    seeking_id: int,
+    author_id: int,
+    new_url: str | None,
+) -> tuple[bool, str | None, str | None]:
+    """Симметричная пара к `update_event_chat_url`. Возвращает
+    `(ok, old_url, new_url)`."""
+    row = await session.execute(
+        select(CompanySeeking.chat_url)
+        .where(CompanySeeking.id == seeking_id)
+        .where(CompanySeeking.author_id == author_id),
+    )
+    current = row.first()
+    if current is None:
+        return False, None, None
+    old_url = current[0]
+    await session.execute(
+        update(CompanySeeking)
+        .where(CompanySeeking.id == seeking_id)
+        .values(chat_url=new_url),
+    )
+    return True, old_url, new_url

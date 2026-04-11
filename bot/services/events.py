@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -91,6 +91,21 @@ async def user_joined_event(
         ),
     )
     return True
+
+
+async def is_user_joined_event(
+    session: AsyncSession,
+    *,
+    event_id: int,
+    user_id: int,
+) -> bool:
+    result = await session.execute(
+        select(EventParticipant.id)
+        .where(EventParticipant.event_id == event_id)
+        .where(EventParticipant.user_id == user_id)
+        .where(EventParticipant.status == PARTICIPANT_JOINED),
+    )
+    return result.first() is not None
 
 
 async def leave_event(
@@ -206,6 +221,7 @@ async def create_event_draft(
     description: str,
     starts_at: datetime,
     place_text: str,
+    chat_url: str | None = None,
     tag_ids: list[int] | None = None,
 ) -> Event:
     event = Event(
@@ -215,6 +231,7 @@ async def create_event_draft(
         description=description,
         starts_at=starts_at,
         place_text=place_text,
+        chat_url=chat_url,
         status=EVENT_PENDING_REVIEW,
     )
     session.add(event)
@@ -226,3 +243,31 @@ async def create_event_draft(
             )
         )
     return event
+
+
+async def update_event_chat_url(
+    session: AsyncSession,
+    *,
+    event_id: int,
+    organizer_id: int,
+    new_url: str | None,
+) -> tuple[bool, str | None, str | None]:
+    """Меняет `chat_url` события от имени организатора.
+
+    Возвращает `(ok, old_url, new_url)`. `ok=False` значит, что события
+    с таким id у этого организатора нет (чужое/не существует) — old/new
+    в этом случае бессмысленны, просто `None`.
+    """
+    row = await session.execute(
+        select(Event.chat_url)
+        .where(Event.id == event_id)
+        .where(Event.organizer_id == organizer_id),
+    )
+    current = row.first()
+    if current is None:
+        return False, None, None
+    old_url = current[0]
+    await session.execute(
+        update(Event).where(Event.id == event_id).values(chat_url=new_url),
+    )
+    return True, old_url, new_url
