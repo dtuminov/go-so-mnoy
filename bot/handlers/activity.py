@@ -23,7 +23,7 @@ from bot.constants import (
 )
 from bot.handlers.profile import ProfileSG, begin_profile_flow
 from bot.keyboards.activity_feed import format_activity_card_text
-from bot.models import ActivityMember
+from bot.models import Activity, ActivityMember
 from bot.services.activities import (
     approve_member,
     cancel_activity,
@@ -31,6 +31,7 @@ from bot.services.activities import (
     count_joined_members,
     get_activity,
     get_activity_members,
+    get_creator_summary,
     get_user_membership,
     is_user_joined,
     join_activity,
@@ -80,6 +81,22 @@ def _members_header(kind: str, title: str) -> str:
     if kind == ACTIVITY_EVENT:
         return f"<b>Участники «{esc(title)}»:</b>"
     return f"<b>Отклики на «{esc(title)}»:</b>"
+
+
+async def _render_card_text(session: AsyncSession, activity: Activity) -> str:
+    """Готовит текст карточки активности с учётом kind: для seeking
+    подгружает имя автора, чтобы карточка не теряла «лицо» автора при
+    ручной перерисовке."""
+    members_count = await count_joined_members(session, activity.id)
+    author_name = author_age = None
+    if activity.kind == ACTIVITY_SEEKING:
+        author_name, author_age = await get_creator_summary(session, activity)
+    return format_activity_card_text(
+        activity,
+        members=members_count,
+        author_name=author_name,
+        author_age=author_age,
+    )
 
 
 # ──────────────────────────── лента: пагинация ───────────────────────────────
@@ -211,8 +228,7 @@ async def on_join(
 
     # Перерисовываем карточку (если это текстовое сообщение карточки).
     if not callback.message.photo:
-        members_count = await count_joined_members(session, activity.id)
-        text = format_activity_card_text(activity, members=members_count)
+        text = await _render_card_text(session, activity)
         rows: list[list[InlineKeyboardButton]] = []
         if is_pending_action:
             rows.append([InlineKeyboardButton(
@@ -310,8 +326,7 @@ async def on_leave(
         await rerender_profile_card(callback.message, session, user)
     else:
         # Из ленты — перерисовываем карточку самой активности.
-        members_count = await count_joined_members(session, activity_id)
-        text = format_activity_card_text(activity, members=members_count)
+        text = await _render_card_text(session, activity)
         join_label = "Иду ✅" if activity.kind == ACTIVITY_EVENT else "Хочу ✅"
         kb = InlineKeyboardMarkup(
             inline_keyboard=[

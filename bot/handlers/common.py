@@ -4,10 +4,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.constants import ACTIVITY_EVENT, ACTIVITY_PUBLISHED
+from bot.constants import ACTIVITY_EVENT, ACTIVITY_PUBLISHED, ACTIVITY_SEEKING
 from bot.keyboards.activity_feed import format_activity_card_text
 from bot.keyboards.main_menu import main_menu_reply
-from bot.services.activities import count_joined_members, get_activity
+from bot.services.activities import (
+    count_joined_members,
+    get_activity,
+    get_creator_summary,
+)
 from bot.services.users import upsert_user_from_message
 
 router = Router(name="common")
@@ -41,7 +45,15 @@ async def cmd_start(
             )
             return
         members = await count_joined_members(session, activity_id)
-        text = format_activity_card_text(activity, members=members)
+        author_name = author_age = None
+        if activity.kind == ACTIVITY_SEEKING:
+            author_name, author_age = await get_creator_summary(session, activity)
+        text = format_activity_card_text(
+            activity,
+            members=members,
+            author_name=author_name,
+            author_age=author_age,
+        )
         section = (
             "📍 Найти событие" if activity.kind == ACTIVITY_EVENT else "🤝 Найти компанию"
         )

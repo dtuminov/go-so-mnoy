@@ -87,6 +87,19 @@ async def get_activity(session: AsyncSession, activity_id: int) -> Activity | No
     return result.scalar_one_or_none()
 
 
+async def get_creator_summary(
+    session: AsyncSession,
+    activity: Activity,
+) -> tuple[str | None, int | None]:
+    """Возвращает `(name, age)` создателя — то, что нужно карточке заявки.
+    Используется только для seeking, чтобы показать «лицо» автора."""
+    user = await session.get(User, activity.creator_id)
+    if user is None:
+        return None, None
+    name = user.first_name or user.username
+    return name, user.age
+
+
 async def count_joined_members(session: AsyncSession, activity_id: int) -> int:
     stmt = (
         select(func.count())

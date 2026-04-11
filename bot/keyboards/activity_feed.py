@@ -80,12 +80,25 @@ def format_activity_card_text(
     activity: Activity,
     *,
     members: int,
+    author_name: str | None = None,
+    author_age: int | None = None,
 ) -> str:
-    """Карточка одной активности — без шапки ленты."""
+    """Карточка одной активности — без шапки ленты.
+
+    `author_name` / `author_age` нужны только для seeking-карточек, чтобы
+    показать «лицо» автора заявки. Caller обязан подгрузить creator
+    отдельным запросом и пробросить значения сюда — формат нарочно не
+    тащит ORM-лоадинг внутрь себя.
+    """
     tag_line = ""
     if activity.tags:
         tag_line = f"\n🏷 {esc(format_tags_inline(list(activity.tags)))}"
     visibility_mark = " 🔒" if activity.visibility == "private" else ""
+
+    author_line = ""
+    if author_name:
+        age_part = f", {author_age} лет" if author_age else ""
+        author_line = f"\n👤 {esc(author_name)}{age_part}"
 
     if activity.kind == ACTIVITY_EVENT:
         when_line = format_datetime_msk(activity.starts_at)
@@ -99,7 +112,8 @@ def format_activity_card_text(
     body_block = f"\n\n{esc(activity.body)}" if activity.body else ""
 
     return (
-        f"<b>{esc(activity.title)}</b>{visibility_mark}\n"
+        f"<b>{esc(activity.title)}</b>{visibility_mark}"
+        f"{author_line}\n"
         f"{when_line}"
         f"{place_line}"
         f"{tag_line}"
@@ -113,6 +127,8 @@ def format_activity_feed_text(
     *,
     members: int,
     active_filter: list[Tag] | None = None,
+    author_name: str | None = None,
+    author_age: int | None = None,
 ) -> str:
     if activity.kind == ACTIVITY_EVENT:
         header = "<b>События в Москве</b>"
@@ -120,4 +136,12 @@ def format_activity_feed_text(
         header = "<b>Ищут компанию · Москва</b>"
     if active_filter:
         header += f"\n<i>🔎 фильтр: {esc(format_tags_inline(active_filter))}</i>"
-    return f"{header}\n\n{format_activity_card_text(activity, members=members)}"
+    return (
+        f"{header}\n\n"
+        + format_activity_card_text(
+            activity,
+            members=members,
+            author_name=author_name,
+            author_age=author_age,
+        )
+    )

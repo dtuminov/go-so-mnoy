@@ -125,7 +125,8 @@ async def build_profile_view(
         for sk in my_seekings:
             status_icon = "✅" if sk.status == "published" else "🕐"
             chat_mark = " · 💬" if sk.chat_url else ""
-            lines.append(f"{status_icon} {esc(sk.title)}{chat_mark}")
+            vis_mark = " · 🔒" if sk.visibility == "private" else ""
+            lines.append(f"{status_icon} {esc(sk.title)}{chat_mark}{vis_mark}")
             inline_rows.append([
                 InlineKeyboardButton(
                     text=f"👥 Отклики: {esc(sk.title[:20])}",
@@ -140,6 +141,10 @@ async def build_profile_view(
                 InlineKeyboardButton(
                     text=f"💬 Чат: {esc(sk.title[:24])}",
                     callback_data=f"actch:show:{sk.id}",
+                ),
+                InlineKeyboardButton(
+                    text=f"🔒 Доступ: {esc(sk.title[:18])}",
+                    callback_data=f"avis:show:{sk.id}",
                 ),
             ])
 

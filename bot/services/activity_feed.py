@@ -8,7 +8,12 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.constants import ACTIVITY_EVENT, MEMBER_PENDING, MOSCOW_CITY_ID
+from bot.constants import (
+    ACTIVITY_EVENT,
+    ACTIVITY_SEEKING,
+    MEMBER_PENDING,
+    MOSCOW_CITY_ID,
+)
 from bot.keyboards.activity_feed import (
     activity_feed_keyboard,
     format_activity_feed_text,
@@ -16,6 +21,7 @@ from bot.keyboards.activity_feed import (
 from bot.models import Tag
 from bot.services.activities import (
     count_joined_members,
+    get_creator_summary,
     get_user_membership,
     is_user_joined,
     list_published_activities,
@@ -58,8 +64,16 @@ async def build_activity_feed_view(
                 membership is not None and membership.status == MEMBER_PENDING
             )
 
+    author_name = author_age = None
+    if act.kind == ACTIVITY_SEEKING:
+        author_name, author_age = await get_creator_summary(session, act)
+
     text = format_activity_feed_text(
-        act, members=members, active_filter=active_filter,
+        act,
+        members=members,
+        active_filter=active_filter,
+        author_name=author_name,
+        author_age=author_age,
     )
     kb = activity_feed_keyboard(
         idx,
