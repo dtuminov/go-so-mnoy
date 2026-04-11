@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -97,6 +97,30 @@ async def is_user_responded_seeking(
         .where(CompanySeekingResponse.user_id == user_id),
     )
     return result.first() is not None
+
+
+async def remove_user_response(
+    session: AsyncSession,
+    *,
+    seeking_id: int,
+    user_id: int,
+) -> bool:
+    """Удаляет отклик пользователя на заявку. True — если был удалён."""
+    existing = await session.execute(
+        select(CompanySeekingResponse.id).where(
+            CompanySeekingResponse.seeking_id == seeking_id,
+            CompanySeekingResponse.user_id == user_id,
+        ),
+    )
+    if existing.first() is None:
+        return False
+    await session.execute(
+        delete(CompanySeekingResponse).where(
+            CompanySeekingResponse.seeking_id == seeking_id,
+            CompanySeekingResponse.user_id == user_id,
+        ),
+    )
+    return True
 
 
 async def close_seeking(
