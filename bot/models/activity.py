@@ -42,6 +42,9 @@ class Activity(Base):
         String(512), default="", server_default="",
     )
     chat_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Telegram file_id обложки активности. NULL — показываем default
+    # из bot/assets/default_activity_cover.png через `bot/services/cover.py`.
+    cover_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     visibility: Mapped[str] = mapped_column(
         String(16), default="open", server_default="open",
     )
