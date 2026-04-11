@@ -11,12 +11,14 @@ BTN_CANCEL = "❌ Отменить"
 def main_menu_reply() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_FIND_EVENTS)],
             [
-                KeyboardButton(text=BTN_FIND_COMPANY),
+                KeyboardButton(text=BTN_FIND_EVENTS),
                 KeyboardButton(text=BTN_CREATE_EVENT),
             ],
-            [KeyboardButton(text=BTN_CREATE_SEEKING)],
+            [
+                KeyboardButton(text=BTN_FIND_COMPANY),
+                KeyboardButton(text=BTN_CREATE_SEEKING),
+            ],
             [KeyboardButton(text=BTN_MY_PROFILE)],
         ],
         resize_keyboard=True,
