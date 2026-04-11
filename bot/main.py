@@ -4,10 +4,13 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from bot.config import get_settings
 from bot.db import session as db_session
 from bot.handlers import router as handlers_router
+from bot.middlewares import DbSessionMiddleware
+from bot.scheduler import create_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +27,21 @@ async def main() -> None:
         settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
+    storage = MemoryStorage()
+    dp = Dispatcher(storage=storage)
+    dp.update.outer_middleware(DbSessionMiddleware())
     dp.include_router(handlers_router)
+
+    scheduler = create_scheduler(bot, db_session.get_sessionmaker())
 
     @dp.startup.register
     async def _on_startup() -> None:
+        scheduler.start()
         logger.info("Bot starting (polling)")
 
     @dp.shutdown.register
     async def _on_shutdown() -> None:
+        scheduler.shutdown(wait=False)
         await db_session.dispose_db()
         logger.info("Bot stopped")
 

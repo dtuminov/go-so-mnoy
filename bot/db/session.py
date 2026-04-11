@@ -18,6 +18,12 @@ def init_db(database_url: str) -> None:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 
+def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    if _session_factory is None:
+        raise RuntimeError("Database is not initialized; call init_db() first")
+    return _session_factory
+
+
 async def dispose_db() -> None:
     global _engine, _session_factory
     if _engine is not None:

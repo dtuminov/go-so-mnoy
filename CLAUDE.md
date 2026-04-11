@@ -17,9 +17,10 @@ Pet project: **канал + Telegram-бот** как MVP для гипотезы
 | Area | File | What it covers |
 |------|------|----------------|
 | Whole repo | `STRUCTURE.md` | Текущая структура каталогов и файлов; обновлять при изменениях |
-| Secrets / config | `.env.example` | Шаблон переменных окружения (скопировать в `.env`, не коммитить `.env`) |
+| Secrets / config | `.env.example` | Шаблон `.env` (без секретов в git); реальные значения только в `.env` |
+| Реализация бота | `bot/` | См. таблицу **Код** в `STRUCTURE.md` |
 
-Когда появится код (например `bot/`, `api/`), добавь в `STRUCTURE.md` отдельные подсекции и при необходимости локальные `STRUCTURE.md` внутри пакетов — по аналогии с крупными монорепами.
+При росте монорепы можно добавить локальные `STRUCTURE.md` в подпакеты.
 
 ## Tech Stack
 
@@ -31,11 +32,11 @@ Pet project: **канал + Telegram-бот** как MVP для гипотезы
 | Telegram | **aiogram 3** | меню, FSM, callback-инлайны под сценарии из `bot.md` |
 | БД | **PostgreSQL** | прод и локальная разработка; при необходимости Docker для инстанса |
 | Доступ к БД | **SQLAlchemy 2.x (async)** + **asyncpg** | типичная связка с aiogram; альтернативы обсуждаем отдельно |
-| Миграции схемы | **Alembic** | ревизии рядом с кодом (каталог `alembic/` после `alembic init`) |
+| Миграции схемы | **Alembic** | `alembic/versions/` — ревизии `001_initial_users`, `002_domain_core` |
 
 Деплой (Docker, PaaS, systemd) — появится отдельной строкой в этом разделе, когда выберешь способ.
 
-Локальная БД: **`docker compose up -d`** в корне (см. `docker-compose.yml`). Скопируй **`.env.example` → `.env`**, подставь `BOT_TOKEN` и `DATABASE_URL` (для compose — строка из комментария в `.env.example`).
+Локальная БД: **`docker compose up -d`** в корне (см. `docker-compose.yml`). В **`.env`** обязательны **`BOT_TOKEN`** и непустой **`DATABASE_URL`** (для compose — пример в комментарии `.env.example`). Пустой `DATABASE_URL` ломает `alembic` и бота. **`BOT_USERNAME`** (без `@`) — опционально, для ссылок из канала. Порт **5432**: если занят — другой Postgres или смени проброс порта в compose и в URL.
 
 ## Essential Commands
 

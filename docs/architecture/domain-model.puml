@@ -1,0 +1,65 @@
+@startuml domain-go-so-mnoy
+skinparam classAttributeIconSize 0
+top to bottom direction
+
+class City {
+  +id : int
+  +name : string
+  +slug : string
+  +timezone : string
+}
+
+class User {
+  +id : int
+  +telegram_id : bigint
+  +created_at : datetime
+}
+
+class Event {
+  +id : int
+  +city_id : int
+  +organizer_id : int
+  +title : string
+  +description : text
+  +starts_at : datetime
+  +place_text : string
+  +status : string
+  +created_at : datetime
+}
+
+class EventParticipant {
+  +id : int
+  +event_id : int
+  +user_id : int
+  +status : string
+  +created_at : datetime
+}
+
+class CompanySeeking {
+  +id : int
+  +city_id : int
+  +author_id : int
+  +title : string
+  +body : text
+  +expires_at : datetime
+  +status : string
+  +created_at : datetime
+}
+
+class CompanySeekingResponse {
+  +id : int
+  +seeking_id : int
+  +user_id : int
+  +created_at : datetime
+}
+
+City "1" --> "*" Event : city
+City "1" --> "*" CompanySeeking : city
+User "1" --> "*" Event : organizes
+User "1" --> "*" EventParticipant : member
+User "1" --> "*" CompanySeeking : author
+User "1" --> "*" CompanySeekingResponse : responder
+Event "1" --> "*" EventParticipant : participants
+CompanySeeking "1" --> "*" CompanySeekingResponse : responses
+
+@enduml
