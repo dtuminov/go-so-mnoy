@@ -177,16 +177,19 @@ async def on_event_leave(callback: CallbackQuery, session: AsyncSession) -> None
     removed = await leave_event(session, event_id=event_id, user_id=user.id)
     if removed:
         await callback.answer("Ты отписался от события.")
-        event = await get_event(session, event_id)
-        if event:
-            n = await count_participants(session, event_id)
-            text = format_event_card_text(event, participants=n)
-            kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="Иду ✅", callback_data=f"j:{event_id}")],
-                ]
-            )
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
+        # Если это карточка события (текстовое сообщение) — обновляем её.
+        # Если это профиль (фото) — не трогаем, edit_text на фото не работает.
+        if not callback.message.photo:
+            event = await get_event(session, event_id)
+            if event:
+                n = await count_participants(session, event_id)
+                text = format_event_card_text(event, participants=n)
+                kb = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [InlineKeyboardButton(text="Иду ✅", callback_data=f"j:{event_id}")],
+                    ]
+                )
+                await callback.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
     else:
         await callback.answer("Ты не был записан.", show_alert=False)
 
@@ -223,8 +226,8 @@ async def on_event_participants(callback: CallbackQuery, session: AsyncSession) 
         bio_part = f"\n   {esc((u.bio or '')[:80])}" if u.bio else ""
         lines.append(f"{i}. {name}{username_part}{age_part}{bio_part}")
 
-    await callback.message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
     await callback.answer()
+    await callback.message.answer("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 @router.callback_query(F.data.startswith("ecancel:"))
@@ -241,11 +244,19 @@ async def on_event_cancel(callback: CallbackQuery, session: AsyncSession) -> Non
     user = await upsert_telegram_user(session, callback.from_user)
     cancelled = await cancel_event(session, event_id=event_id, organizer_id=user.id)
     if cancelled:
-        await callback.answer("Событие отменено.", show_alert=False)
-        await callback.message.edit_text(
-            (callback.message.text or "") + "\n\n<i>🚫 Отменено</i>",
-            reply_markup=None,
-            parse_mode=ParseMode.HTML,
-        )
+        await callback.answer("Событие отменено.", show_alert=True)
+        # Профиль — фото-сообщение, edit_text недоступен; просто убираем клавиатуру у caption.
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=(callback.message.caption or "") + "\n\n<i>🚫 Событие отменено</i>",
+                reply_markup=None,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            await callback.message.edit_text(
+                (callback.message.text or "") + "\n\n<i>🚫 Отменено</i>",
+                reply_markup=None,
+                parse_mode=ParseMode.HTML,
+            )
     else:
         await callback.answer("Не удалось отменить — это не твоё событие.", show_alert=True)

@@ -10,7 +10,7 @@ from bot.constants import (
     MOSCOW_CITY_ID,
     PARTICIPANT_JOINED,
 )
-from bot.models import Event, EventParticipant, Tag, User, event_tags
+from bot.models import Event, EventParticipant, User, event_tags
 
 
 async def list_published_events(
@@ -220,9 +220,9 @@ async def create_event_draft(
     session.add(event)
     await session.flush()
     if tag_ids:
-        tags = (
-            await session.execute(select(Tag).where(Tag.id.in_(tag_ids)))
-        ).scalars().all()
-        event.tags = list(tags)
-        await session.flush()
+        await session.execute(
+            event_tags.insert().values(
+                [{"event_id": event.id, "tag_id": tid} for tid in tag_ids]
+            )
+        )
     return event
