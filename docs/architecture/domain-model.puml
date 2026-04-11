@@ -12,54 +12,59 @@ class City {
 class User {
   +id : int
   +telegram_id : bigint
+  +username : string?
+  +first_name : string?
+  +last_name : string?
+  +avatar_file_id : string?
+  +age : int?
+  +bio : text?
+  +search_prefs : jsonb?
   +created_at : datetime
+  +updated_at : datetime?
 }
 
-class Event {
+class Activity {
   +id : int
   +city_id : int
-  +organizer_id : int
-  +title : string
-  +description : text
-  +starts_at : datetime
-  +place_text : string
-  +status : string
-  +created_at : datetime
-}
-
-class EventParticipant {
-  +id : int
-  +event_id : int
-  +user_id : int
-  +status : string
-  +created_at : datetime
-}
-
-class CompanySeeking {
-  +id : int
-  +city_id : int
-  +author_id : int
+  +creator_id : int
+  +kind : enum<event|seeking>
   +title : string
   +body : text
+  +starts_at : datetime?
   +expires_at : datetime
+  +place_text : string
+  +chat_url : string?
+  +visibility : enum<open|private>
   +status : string
+  +published_notified : bool
+  +reminder_sent : bool
   +created_at : datetime
 }
 
-class CompanySeekingResponse {
+class ActivityMember {
   +id : int
-  +seeking_id : int
+  +activity_id : int
   +user_id : int
+  +status : enum<pending|joined>
+  +chat_invite_notified : bool
   +created_at : datetime
+  --
+  unique(activity_id, user_id)
 }
 
-City "1" --> "*" Event : city
-City "1" --> "*" CompanySeeking : city
-User "1" --> "*" Event : organizes
-User "1" --> "*" EventParticipant : member
-User "1" --> "*" CompanySeeking : author
-User "1" --> "*" CompanySeekingResponse : responder
-Event "1" --> "*" EventParticipant : participants
-CompanySeeking "1" --> "*" CompanySeekingResponse : responses
+class Tag {
+  +id : int
+  +slug : string
+  +name : string
+  +emoji : string
+  +sort_order : int
+  +is_active : bool
+}
+
+City "1" --> "*" Activity : city
+User "1" --> "*" Activity : creates
+User "1" --> "*" ActivityMember : member
+Activity "1" --> "*" ActivityMember : members
+Activity "*" -- "*" Tag : activity_tags
 
 @enduml

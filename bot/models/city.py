@@ -14,7 +14,4 @@ class City(Base):
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
 
-    events: Mapped[list["Event"]] = relationship(back_populates="city")
-    company_seekings: Mapped[list["CompanySeeking"]] = relationship(
-        back_populates="city",
-    )
+    activities: Mapped[list["Activity"]] = relationship(back_populates="city")

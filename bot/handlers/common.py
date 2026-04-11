@@ -4,11 +4,15 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.constants import EVENT_PUBLISHED
+from bot.constants import ACTIVITY_EVENT, ACTIVITY_PUBLISHED, ACTIVITY_SEEKING
+from bot.keyboards.activity_feed import format_activity_card_text
 from bot.keyboards.main_menu import main_menu_reply
-from bot.services.events import get_event
+from bot.services.activities import (
+    count_joined_members,
+    get_activity,
+    get_creator_summary,
+)
 from bot.services.users import upsert_user_from_message
-from bot.utils.formatting import esc, format_datetime_msk
 
 router = Router(name="common")
 
@@ -24,37 +28,53 @@ async def cmd_start(
     await upsert_user_from_message(session, message)
     args = (command.args or "").strip()
 
-    if args.startswith("event_"):
+    # Канонический формат ссылки после унификации.
+    if args.startswith("act_"):
         try:
-            event_id = int(args.removeprefix("event_").strip())
+            activity_id = int(args.removeprefix("act_").strip())
         except ValueError:
-            await message.answer("Не понял ссылку на событие. Открываю меню.", reply_markup=main_menu_reply())
+            await message.answer(
+                "Не понял ссылку. Открываю меню.", reply_markup=main_menu_reply(),
+            )
             return
-        event = await get_event(session, event_id)
-        if event is None or event.status != EVENT_PUBLISHED:
-            await message.answer("Событие не найдено или ещё не опубликовано.", reply_markup=main_menu_reply())
+        activity = await get_activity(session, activity_id)
+        if activity is None or activity.status != ACTIVITY_PUBLISHED:
+            await message.answer(
+                "Уже недоступно. Загляни в ленту.",
+                reply_markup=main_menu_reply(),
+            )
             return
-        text = (
-            f"<b>{esc(event.title)}</b>\n"
-            f"{format_datetime_msk(event.starts_at)}\n"
-            f"{esc(event.place_text)}\n\n"
-            f"{esc(event.description)}"
+        members = await count_joined_members(session, activity_id)
+        author_name = author_age = None
+        if activity.kind == ACTIVITY_SEEKING:
+            author_name, author_age = await get_creator_summary(session, activity)
+        text = format_activity_card_text(
+            activity,
+            members=members,
+            author_name=author_name,
+            author_age=author_age,
+        )
+        section = (
+            "📍 Найти событие" if activity.kind == ACTIVITY_EVENT else "🤝 Найти компанию"
         )
         await message.answer(
-            text + "\n\nНажми «📍 Найти событие» → открой карточку → «Иду», чтобы записаться.",
+            text + f"\n\nОткрой раздел «{section}» и нажми «Иду» / «Хочу», чтобы записаться.",
             reply_markup=main_menu_reply(),
         )
         return
 
-    if args.startswith("seek_"):
+    # Старые форматы из уже опубликованных постов канала: id'ы старых
+    # таблиц после миграции 007 не сохранились, поэтому честно говорим
+    # «устарело».
+    if args.startswith("event_") or args.startswith("seek_"):
         await message.answer(
-            "Заявки «ищу компанию» скоро здесь же. Пока загляни в «🤝 Найти компанию».",
+            "Ссылка из старых постов устарела. Открой раздел в меню — там актуальная лента.",
             reply_markup=main_menu_reply(),
         )
         return
 
     await message.answer(
-        "Привет! Выбери действие в меню ниже — до события пара кликов.",
+        "Привет! Выбери действие в меню ниже — до встречи пара кликов.",
         reply_markup=main_menu_reply(),
     )
 
@@ -63,5 +83,5 @@ async def cmd_start(
 async def cmd_help(message: Message) -> None:
     await message.answer(
         "Команды: /start — меню и ссылки из канала, /help — эта справка, "
-        "/cancel — отменить создание события.",
+        "/cancel — отменить создание.",
     )

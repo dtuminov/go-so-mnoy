@@ -34,11 +34,9 @@ class User(Base):
     # {"event_tag_ids": [int, ...], "seeking_tag_ids": [int, ...]}
     search_prefs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
-    organized_events: Mapped[list["Event"]] = relationship(back_populates="organizer")
-    event_participations: Mapped[list["EventParticipant"]] = relationship(
-        back_populates="user",
+    created_activities: Mapped[list["Activity"]] = relationship(
+        back_populates="creator",
     )
-    company_seekings: Mapped[list["CompanySeeking"]] = relationship(back_populates="author")
-    company_seeking_responses: Mapped[list["CompanySeekingResponse"]] = relationship(
+    activity_memberships: Mapped[list["ActivityMember"]] = relationship(
         back_populates="user",
     )

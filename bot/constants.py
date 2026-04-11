@@ -3,19 +3,22 @@
 # После миграции 002 первая строка в cities — Москва.
 MOSCOW_CITY_ID: int = 1
 
-# События
-EVENT_DRAFT = "draft"
-EVENT_PENDING_REVIEW = "pending_review"
-EVENT_PUBLISHED = "published"
-EVENT_REJECTED = "rejected"
-EVENT_CANCELLED = "cancelled"
+# Activity.kind
+ACTIVITY_EVENT = "event"
+ACTIVITY_SEEKING = "seeking"
 
-# Участие
-PARTICIPANT_JOINED = "joined"
-PARTICIPANT_LEFT = "left"
+# Activity.status (lifecycle модерации)
+ACTIVITY_DRAFT = "draft"
+ACTIVITY_PENDING_REVIEW = "pending_review"
+ACTIVITY_PUBLISHED = "published"
+ACTIVITY_REJECTED = "rejected"
+ACTIVITY_CANCELLED = "cancelled"
+ACTIVITY_CLOSED = "closed"  # для seeking — автор сам закрыл
 
-# «Ищу компанию»
-SEEKING_DRAFT = "draft"
-SEEKING_PENDING_REVIEW = "pending_review"
-SEEKING_PUBLISHED = "published"
-SEEKING_CLOSED = "closed"
+# Activity.visibility
+VISIBILITY_OPEN = "open"
+VISIBILITY_PRIVATE = "private"
+
+# ActivityMember.status
+MEMBER_PENDING = "pending"
+MEMBER_JOINED = "joined"
