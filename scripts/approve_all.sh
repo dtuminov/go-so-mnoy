@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Публикует все pending_review события и заявки «ищу компанию».
-# Использование: ./scripts/approve_all.sh [--events-only | --seekings-only]
+# Публикует все pending_review активности (события и заявки «ищу компанию»).
+# После унификации (миграция 007) обе сущности живут в таблице `activities`,
+# тип различает колонка `kind` ('event' | 'seeking').
+#
+# Использование:
+#   ./scripts/approve_all.sh                  # обе ленты
+#   ./scripts/approve_all.sh --events-only    # только kind='event'
+#   ./scripts/approve_all.sh --seekings-only  # только kind='seeking'
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,31 +31,25 @@ run_sql() {
   echo "$1" | $PSQL
 }
 
-approve_events() {
-  echo "==> Публикуем события (pending_review → published):"
+approve_kind() {
+  local kind="$1"
+  local label="$2"
+  local time_col="$3"
+  echo "==> Публикуем $label (pending_review → published):"
   run_sql "
-    UPDATE events
+    UPDATE activities
     SET status = 'published'
-    WHERE status = 'pending_review';
-    SELECT id, title, status, starts_at
-    FROM events
+    WHERE status = 'pending_review' AND kind = '$kind';
+    SELECT id, title, status, $time_col
+    FROM activities
+    WHERE kind = '$kind'
     ORDER BY id DESC
     LIMIT 20;
   "
 }
 
-approve_seekings() {
-  echo "==> Публикуем заявки «ищу компанию» (pending_review → published):"
-  run_sql "
-    UPDATE company_seekings
-    SET status = 'published'
-    WHERE status = 'pending_review';
-    SELECT id, title, status, expires_at
-    FROM company_seekings
-    ORDER BY id DESC
-    LIMIT 20;
-  "
-}
+approve_events()   { approve_kind "event"   "события"               "starts_at"; }
+approve_seekings() { approve_kind "seeking" "заявки «ищу компанию»" "expires_at"; }
 
 case "$MODE" in
   --events-only)
