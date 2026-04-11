@@ -11,10 +11,17 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.handlers.company_seeking import CreateSeekingSG, build_feed_view
+from bot.handlers.company_seeking import CreateSeekingSG, _start_seeking_creation, build_feed_view
 from bot.handlers.create_event import CreateEventSG
 from bot.handlers.profile import ProfileSG, begin_profile_flow
-from bot.keyboards.main_menu import BTN_CREATE_EVENT, BTN_FIND_COMPANY, BTN_FIND_EVENTS, BTN_MY_PROFILE
+from bot.keyboards.main_menu import (
+    BTN_CREATE_EVENT,
+    BTN_CREATE_SEEKING,
+    BTN_FIND_COMPANY,
+    BTN_FIND_EVENTS,
+    BTN_MY_PROFILE,
+    cancel_keyboard,
+)
 from bot.services.company_seeking import remove_user_response
 from bot.services.event_feed import build_event_feed_view
 from bot.services.profile_view import build_profile_view, rerender_profile_card
@@ -51,15 +58,8 @@ async def on_find_company(message: Message, session: AsyncSession) -> None:
         session, 0, tag_ids=ids or None, viewer_user_id=user.id,
     )
     if view is None:
-        kb = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="➕ Предложить своё", callback_data="sk:create")]
-            ]
-        )
         await message.answer(
-            "Пока нет активных заявок в Москве. Будь первым — предложи своё!",
-            reply_markup=kb,
-            parse_mode=ParseMode.HTML,
+            "Пока нет активных заявок в Москве. Будь первым — нажми «➕ Ищу компанию»!",
         )
         return
     text, kb = view
@@ -109,6 +109,11 @@ async def on_remove_response(callback: CallbackQuery, session: AsyncSession) -> 
 async def on_create_event_entry(message: Message, state: FSMContext) -> None:
     await state.set_state(CreateEventSG.title)
     await message.answer(
-        "Создаём событие. Шаг 1/6: <b>название</b> (до 120 символов).\n"
-        "Отмена: /cancel",
+        "Создаём событие. Шаг 1/6: <b>название</b> (до 120 символов).",
+        reply_markup=cancel_keyboard(),
     )
+
+
+@router.message(F.text == BTN_CREATE_SEEKING, StateFilter(default_state))
+async def on_create_seeking_entry(message: Message, state: FSMContext) -> None:
+    await _start_seeking_creation(message, state)

@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from bot.constants import MOSCOW_CITY_ID, SEEKING_PUBLISHED
 from bot.handlers.profile import ProfileSG, begin_profile_flow
-from bot.keyboards.main_menu import main_menu_reply
+from bot.keyboards.main_menu import BTN_CANCEL, cancel_keyboard, main_menu_reply
 from bot.keyboards.tag_picker import format_tags_inline, tag_picker_keyboard
 from bot.models import User
 from bot.services.chat_invite_notify import mark_response_notified
@@ -117,10 +117,7 @@ def _feed_keyboard(
     if viewer_responded and chat_url:
         rows.append([InlineKeyboardButton(text="💬 Чат заявки", url=chat_url)])
     rows.append(
-        [
-            InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:s:open"),
-            InlineKeyboardButton(text="➕ Предложить своё", callback_data="sk:create"),
-        ]
+        [InlineKeyboardButton(text="🔎 Фильтры", callback_data="tp:s:open")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -361,23 +358,31 @@ async def on_seeking_close(callback: CallbackQuery, session: AsyncSession) -> No
 
 # ──────────────────────────── FSM создания ───────────────────────────────────
 
+async def _start_seeking_creation(target: Message, state: FSMContext) -> None:
+    """Общий хелпер запуска FSM: и из меню, и из callback."""
+    await state.set_state(CreateSeekingSG.title)
+    await target.answer(
+        "Создаём заявку «ищу компанию».\n\n"
+        "<b>Шаг 1/5</b>: коротко — <b>что хочешь сделать?</b>\n"
+        "Например: «Сходить в кино», «Поиграть в настолки».",
+        reply_markup=cancel_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 @router.callback_query(F.data == "sk:create")
 async def on_create_start_cb(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is None:
         await callback.answer()
         return
-    await state.set_state(CreateSeekingSG.title)
-    await callback.message.answer(
-        "Создаём заявку «ищу компанию».\n\n"
-        "<b>Шаг 1/5</b>: коротко — <b>что хочешь сделать?</b>\n"
-        "Например: «Сходить в кино», «Поиграть в настолки».\n"
-        "Отмена: /cancel",
-        parse_mode=ParseMode.HTML,
-    )
+    await _start_seeking_creation(callback.message, state)
     await callback.answer()
 
 
-@router.message(Command("cancel"), StateFilter(CreateSeekingSG))
+@router.message(
+    (Command("cancel") | F.text == BTN_CANCEL),
+    StateFilter(CreateSeekingSG),
+)
 async def seeking_cancel(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer("Создание заявки отменено.", reply_markup=main_menu_reply())
