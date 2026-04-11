@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import (
     ACTIVITY_EVENT,
-    MEMBER_JOINED,
     VISIBILITY_PRIVATE,
 )
 from bot.keyboards.tag_picker import format_tags_inline
@@ -26,14 +25,12 @@ from bot.services.activities import (
     count_pending_members,
     get_activities_with_incoming_pending,
     get_activity,
-    get_activity_members,
     get_creator_summary,
     get_user_created_activities,
     get_user_joined_activities,
     get_user_pending_activities,
     get_user_role_in_activity,
 )
-from bot.services.users import get_user_by_id
 from bot.utils.formatting import esc, format_datetime_msk
 
 # ──────────────────────────── sections enum ─────────────────────────────────
@@ -405,103 +402,6 @@ async def build_activity_detail_view(
     rows.append(_back_row(f"prf:sec:{from_section}:{from_page}"))
 
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-# ──────────────────────────── MEMBER CAROUSEL ──────────────────────────────
-
-
-async def _get_carousel_members(
-    session: AsyncSession,
-    activity: Activity,
-) -> list[tuple[User, bool]]:
-    """Готовит список `(user, is_creator)` для карусели анкет:
-    сначала создатель, потом joined-члены в порядке вступления.
-    Если вдруг создатель сам же joined-член — не дублируется."""
-    result: list[tuple[User, bool]] = []
-
-    creator = await get_user_by_id(session, activity.creator_id)
-    if creator is not None:
-        result.append((creator, True))
-
-    joined_rows = await get_activity_members(
-        session, activity_id=activity.id, status=MEMBER_JOINED,
-    )
-    for _member, user in joined_rows:
-        if user.id == activity.creator_id:
-            continue
-        result.append((user, False))
-
-    return result
-
-
-async def build_member_carousel_view(
-    session: AsyncSession,
-    *,
-    activity_id: int,
-    from_section: str,
-    from_page: int,
-    member_index: int,
-) -> tuple[str | None, str, InlineKeyboardMarkup] | None:
-    """Экран карусели участников активности.
-
-    Возвращает `(photo_file_id, caption, keyboard)` или `None`, если
-    активности/членов нет. `photo_file_id` может быть `None`, если у
-    конкретного участника нет аватара — тогда caller зовёт
-    `edit_caption` без смены фото.
-    """
-    activity = await get_activity(session, activity_id)
-    if activity is None:
-        return None
-
-    members = await _get_carousel_members(session, activity)
-    if not members:
-        return None
-
-    total = len(members)
-    idx = max(0, min(member_index, total - 1))
-    user, is_creator = members[idx]
-
-    name = esc(user.first_name or user.username or "—")
-    badge = " · 🎙 Организатор" if is_creator else ""
-    username_part = f"\n@{esc(user.username)}" if user.username else ""
-    age_part = f"\nВозраст: {user.age}" if user.age else ""
-    bio_block = f"\n\n{esc(user.bio)}" if user.bio else ""
-
-    caption = (
-        f"<b>👥 Участники «{esc(activity.title)}»</b>  ·  {idx + 1}/{total}\n\n"
-        f"<b>👤 {name}</b>{badge}"
-        f"{username_part}"
-        f"{age_part}"
-        f"{bio_block}"
-    )
-
-    # Клавиатура
-    prev_idx = max(0, idx - 1)
-    next_idx = min(total - 1, idx + 1)
-    base_cb = f"prf:mem:{from_section}:{from_page}:{activity_id}"
-
-    rows: list[list[InlineKeyboardButton]] = []
-    if total > 1:
-        rows.append([
-            InlineKeyboardButton(text="⬅️", callback_data=f"{base_cb}:{prev_idx}"),
-            InlineKeyboardButton(text=f"{idx + 1}/{total}", callback_data="prf:noop"),
-            InlineKeyboardButton(text="➡️", callback_data=f"{base_cb}:{next_idx}"),
-        ])
-
-    # Ссылка «написать» — только если у юзера есть telegram_id (он есть
-    # всегда, но на всякий случай) и это не мы сами (не ссылаться на себя).
-    if user.telegram_id:
-        rows.append([InlineKeyboardButton(
-            text=f"💬 Написать {_trim(name, 18)}",
-            url=f"tg://user?id={user.telegram_id}",
-        )])
-
-    rows.append([InlineKeyboardButton(
-        text="↩️ К активности",
-        callback_data=f"prf:act:{from_section}:{from_page}:{activity_id}",
-    )])
-
-    return user.avatar_file_id, caption, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ──────────────────────────── rerender helpers ──────────────────────────────

@@ -10,6 +10,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +42,10 @@ from bot.services.activities import (
 )
 from bot.services.activity_feed import build_activity_feed_view
 from bot.services.chat_invite_notify import mark_member_notified
+from bot.services.member_carousel import (
+    CarouselContext,
+    build_member_carousel_view,
+)
 from bot.services.notifications import (
     notify_creator_about_new_member,
     notify_members_about_cancel,
@@ -635,3 +640,138 @@ async def on_close(callback: CallbackQuery, session: AsyncSession) -> None:
             )
         except Exception:
             pass
+
+
+# ──────────────────────────── feed: members carousel ────────────────────────
+
+
+def _feed_carousel_context(activity_id: int) -> CarouselContext:
+    return CarouselContext(
+        nav_cb_template=f"fmem:n:{activity_id}:{{idx}}",
+        back_cb="fmem:x",
+        back_label="❌ Закрыть",
+    )
+
+
+@router.callback_query(F.data.startswith("fmem:o:"))
+async def on_feed_members_open(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    """Открыть карусель участников как отдельное фото-сообщение под
+    карточкой ленты. Не трогает карточку — она остаётся там, где была,
+    карусель появляется под ней и закрывается независимо."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    try:
+        activity_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    context = _feed_carousel_context(activity_id)
+    view = await build_member_carousel_view(
+        session,
+        activity_id=activity_id,
+        member_index=0,
+        context=context,
+    )
+    if view is None:
+        await callback.answer("Пока никого нет.", show_alert=True)
+        return
+    photo_id, caption, kb = view
+
+    if photo_id:
+        await callback.message.answer_photo(
+            photo=photo_id,
+            caption=caption,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        # У участника не оказалось аватара — показываем текстом.
+        await callback.message.answer(
+            caption,
+            reply_markup=kb,
+            parse_mode=ParseMode.HTML,
+        )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("fmem:n:"))
+async def on_feed_members_nav(
+    callback: CallbackQuery,
+    session: AsyncSession,
+) -> None:
+    """Перелистывание карусели в фото-сообщении через edit_message_media."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    # Формат: fmem:n:<activity_id>:<idx>
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+    try:
+        activity_id = int(parts[2])
+        idx = int(parts[3])
+    except ValueError:
+        await callback.answer("Некорректные данные", show_alert=True)
+        return
+
+    context = _feed_carousel_context(activity_id)
+    view = await build_member_carousel_view(
+        session,
+        activity_id=activity_id,
+        member_index=idx,
+        context=context,
+    )
+    if view is None:
+        await callback.answer("Пусто.", show_alert=True)
+        return
+    photo_id, caption, kb = view
+
+    try:
+        if callback.message.photo and photo_id:
+            await callback.message.edit_media(
+                media=InputMediaPhoto(
+                    media=photo_id,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                ),
+                reply_markup=kb,
+            )
+        elif callback.message.photo:
+            # У нового участника нет аватара — обновляем только caption,
+            # фото предыдущего участника остаётся как есть.
+            await callback.message.edit_caption(
+                caption=caption,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
+            )
+        else:
+            # Fallback: если исходно отправляли текстом (не было аватара
+            # у первого участника).
+            await callback.message.edit_text(
+                caption,
+                reply_markup=kb,
+                parse_mode=ParseMode.HTML,
+            )
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data == "fmem:x")
+async def on_feed_members_close(callback: CallbackQuery) -> None:
+    """Закрытие карусели — просто удаляем её сообщение. Карточка ленты
+    остаётся нетронутой в чате выше."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.answer()

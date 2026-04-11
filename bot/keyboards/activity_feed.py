@@ -65,6 +65,11 @@ def activity_feed_keyboard(
     if viewer_joined and chat_url:
         rows.append([InlineKeyboardButton(text="💬 Чат", url=chat_url)])
 
+    rows.append([InlineKeyboardButton(
+        text="👥 Участники",
+        callback_data=f"fmem:o:{activity_id}",
+    )])
+
     bottom: list[InlineKeyboardButton] = [
         InlineKeyboardButton(text="🔎 Фильтры", callback_data=_filter_namespace(kind)),
     ]
