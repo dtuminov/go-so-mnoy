@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from bot.constants import (
     ACTIVITY_EVENT,
     ACTIVITY_PUBLISHED,
+    ACTIVITY_REJECTED,
     ACTIVITY_SEEKING,
     MEMBER_JOINED,
 )
@@ -57,6 +58,53 @@ async def _notify_published(bot: Bot, factory: async_sessionmaker) -> None:
                         f"<b>{esc(activity.title)}</b>\n\n"
                         f"Она появилась в разделе «🤝 Найти компанию» — "
                         f"люди могут откликнуться."
+                    )
+                try:
+                    await bot.send_message(
+                        creator.telegram_id,
+                        text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Cannot notify creator %s: %s", creator.telegram_id, e,
+                    )
+
+            await session.execute(
+                update(Activity)
+                .where(Activity.id == activity.id)
+                .values(published_notified=True)
+            )
+
+        await session.commit()
+
+
+# ── уведомление об отклонении ──────────────────────────────────────────────
+
+
+async def _notify_rejected(bot: Bot, factory: async_sessionmaker) -> None:
+    async with factory() as session:
+        stmt = (
+            select(Activity)
+            .where(Activity.status == ACTIVITY_REJECTED)
+            .where(Activity.published_notified.is_(False))
+        )
+        activities = list((await session.execute(stmt)).scalars().all())
+
+        for activity in activities:
+            creator = await session.get(User, activity.creator_id)
+            if creator:
+                if activity.kind == ACTIVITY_EVENT:
+                    text = (
+                        f"❌ Твоё событие не прошло модерацию.\n\n"
+                        f"<b>{esc(activity.title)}</b>\n\n"
+                        f"Попробуй создать новое с более подробным описанием."
+                    )
+                else:
+                    text = (
+                        f"❌ Твоя заявка не прошла модерацию.\n\n"
+                        f"<b>{esc(activity.title)}</b>\n\n"
+                        f"Попробуй создать новую с более подробным описанием."
                     )
                 try:
                     await bot.send_message(
@@ -142,6 +190,14 @@ def create_scheduler(bot: Bot, factory: async_sessionmaker) -> AsyncIOScheduler:
         minutes=2,
         args=[bot, factory],
         id="notify_published",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _notify_rejected,
+        trigger="interval",
+        minutes=2,
+        args=[bot, factory],
+        id="notify_rejected",
         replace_existing=True,
     )
     scheduler.add_job(

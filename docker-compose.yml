@@ -15,5 +15,38 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    command: alembic upgrade head
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://go_so_mnoy:go_so_mnoy@postgres:5432/go_so_mnoy
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  bot:
+    build: .
+    command: python -m bot
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://go_so_mnoy:go_so_mnoy@postgres:5432/go_so_mnoy
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  admin-bot:
+    build: .
+    command: python -m admin_bot
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://go_so_mnoy:go_so_mnoy@postgres:5432/go_so_mnoy
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
 volumes:
   go_so_mnoy_pgdata:

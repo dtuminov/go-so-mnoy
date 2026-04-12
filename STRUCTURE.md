@@ -77,3 +77,17 @@
 | `alembic/versions/005_tags_and_search_prefs.py` | `tags`, `event_tags`, `seeking_tags`, `users.search_prefs` (JSONB); сидится стартовый набор тегов |
 | `alembic/versions/006_chat_links_and_notify_flags.py` | `events.chat_url`, `company_seekings.chat_url`, `event_participants.chat_invite_notified`, `company_seeking_responses.chat_invite_notified` |
 | `alembic/versions/007_unify_activities.py` | Слияние events+seekings в `activities`, event_participants+company_seeking_responses в `activity_members`, event_tags+seeking_tags в `activity_tags`. Копирование данных, дроп legacy-таблиц. Добавляет `visibility`. Для событий `expires_at = starts_at + 2h`. |
+
+## Админ-бот модерации
+
+Отдельный Telegram-бот для модерации заявок (approve/reject) вместо ручного SQL.
+Запуск: `python -m admin_bot`. Требует `ADMIN_BOT_TOKEN` и `ADMIN_IDS` в `.env`.
+Переиспользует `bot/models/`, `bot/db/`, `bot/constants.py`, `bot/utils/`.
+
+| Путь | Назначение |
+|------|------------|
+| `admin_bot/` | Пакет админ-бота: `python -m admin_bot` |
+| `admin_bot/__main__.py` | Точка входа CLI |
+| `admin_bot/main.py` | Dispatcher, middleware, polling |
+| `admin_bot/config.py` | `AdminSettings`: `ADMIN_BOT_TOKEN`, `DATABASE_URL`, `ADMIN_IDS` |
+| `admin_bot/handlers/moderation.py` | `/start`, `/pending` (список pending_review + кнопки Approve/Reject), `/stats` |

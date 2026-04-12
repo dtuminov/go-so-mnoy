@@ -16,8 +16,8 @@ fi
 
 usage() {
   echo "Использование: $0 [опции]" >&2
-  echo "  (без опций)     — стоп ботов этого репо → alembic upgrade head → бот в foreground" >&2
-  echo "  --bg | -b       — то же, бот в фоне (лог: ${ROOT}/bot.log)" >&2
+  echo "  (без опций)     — стоп ботов этого репо → alembic upgrade head → bot + admin_bot в foreground" >&2
+  echo "  --bg | -b       — то же, оба в фоне (логи: bot.log, admin_bot.log)" >&2
   echo "  --skip-migrate  — не вызывать alembic (если БД недоступна и нужен только стоп)" >&2
   echo "  --help | -h     — эта справка" >&2
   echo "" >&2
@@ -46,10 +46,11 @@ for arg in "$@"; do
   esac
 done
 
-# PID-ы процессов с командной строкой «python -m bot», cwd = корень этого проекта
+# PID-ы процессов с командной строкой «python -m bot» или «python -m admin_bot»,
+# cwd = корень этого проекта
 list_repo_bot_pids() {
   local pid cwd
-  for pid in $(pgrep -f "[Pp]ython.* -m bot" 2>/dev/null || true); do
+  for pid in $(pgrep -f "[Pp]ython.* -m (bot|admin_bot)" 2>/dev/null || true); do
     cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
     if [[ "$cwd" == "$ROOT" ]]; then
       echo "$pid"
@@ -73,7 +74,7 @@ stop_bots() {
     echo "restart.sh: процессов «python -m bot» с cwd=$ROOT не найдено"
     return 0
   fi
-  echo "restart.sh: останавливаю PID: $pids"
+  echo "restart.sh: останавливаю bot + admin_bot PID: $pids"
   for pid in $pids; do
     kill -TERM "$pid" 2>/dev/null || true
   done
@@ -99,11 +100,17 @@ else
 fi
 
 if [[ "$RUN_BG" -eq 1 ]]; then
-  LOG="${ROOT}/bot.log"
-  echo "restart.sh: запуск в фоне, лог: $LOG"
-  nohup "$VENV_PY" -m bot >>"$LOG" 2>&1 &
-  echo "PID: $!"
+  BOT_LOG="${ROOT}/bot.log"
+  ADMIN_LOG="${ROOT}/admin_bot.log"
+  echo "restart.sh: запуск в фоне"
+  nohup "$VENV_PY" -m bot >>"$BOT_LOG" 2>&1 &
+  echo "bot PID: $! (лог: $BOT_LOG)"
+  nohup "$VENV_PY" -m admin_bot >>"$ADMIN_LOG" 2>&1 &
+  echo "admin_bot PID: $! (лог: $ADMIN_LOG)"
 else
-  echo "restart.sh: foreground (Ctrl+C — стоп). Фон: $0 --bg"
+  echo "restart.sh: foreground — оба бота (Ctrl+C — стоп). Фон: $0 --bg"
+  "$VENV_PY" -m admin_bot &
+  ADMIN_PID=$!
+  trap 'kill $ADMIN_PID 2>/dev/null; wait $ADMIN_PID 2>/dev/null' EXIT
   exec "$VENV_PY" -m bot
 fi
