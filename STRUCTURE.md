@@ -46,12 +46,13 @@
 | `bot/__main__.py` | Точка входа CLI |
 | `bot/main.py` | `Dispatcher`, middleware сессии БД, polling, запуск scheduler |
 | `bot/config.py` | `pydantic-settings`: `BOT_TOKEN`, `DATABASE_URL`, `BOT_USERNAME` |
-| `bot/constants.py` | ID Москвы, строковые статусы сущностей |
+| `bot/constants.py` | Строковые статусы сущностей |
 | `bot/scheduler.py` | APScheduler: уведомление о публикации (каждые 2 мин) + напоминание за 2 ч (каждые 5 мин) |
 | `bot/db/` | `Base`, фабрика сессий |
 | `bot/middlewares/` | `DbSessionMiddleware` — сессия и commit/rollback на апдейт |
-| `bot/models/` | `User` (+ `search_prefs` JSONB), `City`, `Activity` (kind/visibility/chat_url/expires_at), `ActivityMember` (status pending/joined + `chat_invite_notified`), `Tag`, ассоциативная `activity_tags` (в `associations.py`) |
-| `bot/services/users.py` | upsert, profile check, update profile |
+| `bot/models/` | `User` (+ `city_id` FK + `search_prefs` JSONB), `City`, `Activity` (kind/visibility/chat_url/expires_at), `ActivityMember` (status pending/joined + `chat_invite_notified`), `Tag`, ассоциативная `activity_tags` (в `associations.py`) |
+| `bot/services/users.py` | upsert, profile check, update profile, `set_user_city` |
+| `bot/services/cities.py` | `list_all_cities`, `search_cities` (ILIKE-поиск) |
 | `bot/services/activities.py` | CRUD единой `Activity`: CRUD, members, join/leave, approve/reject, cancel/close, фильтр по тегам в `list_published_activities`, `update_chat_url`, `update_visibility`, `is_user_joined`, helpers профиля |
 | `bot/services/activity_feed.py` | Сборка карточки ленты `Activity` (text+keyboard) для events и seekings — единая функция с параметром `kind` |
 | `bot/services/tags.py` | чтение активных тегов, выборка по id |
@@ -67,7 +68,7 @@
 | `bot/handlers/activity.py` | Действия над `Activity`: пагинация ленты (`af:g/c:`), join (`aj:`) с веткой open/private, leave (`al:`), members/responders (`amem:`), approve/reject (`amap:` / `amrj:`), cancel (`acan:`), close (`aclose:`) |
 | `bot/handlers/activity_create.py` | FSM создания: `CreateEventSG` (6 шагов) и `CreateSeekingSG` (5 шагов) с шагом chat_url и опцией пропуска |
 | `bot/handlers/activity_chat.py` | Управление настройками активности из профиля: chat_url (`actch:*`, `EditChatSG`, broadcast при первом заполнении) и visibility (`avis:show/set:*`) |
-| `bot/handlers/profile.py` | FSM анкеты (фото → возраст → bio); `profile:edit`; авто-вступление в `pending_join_activity_id` после анкеты |
+| `bot/handlers/profile.py` | FSM анкеты (город → фото → возраст → bio); `profile:edit`; авто-вступление в `pending_join_activity_id` после анкеты |
 | `bot/handlers/filters.py` | Пикер тег-фильтров: `tp:e:*` (events lente) и `tp:s:*` (seekings lente) — open/toggle/apply/clear/cancel; пишет в `users.search_prefs` |
 | `bot/utils/` | Форматирование дат (МСК), парсер даты для FSM, `chat_link.py` — валидатор/нормализатор Telegram-ссылок |
 | `alembic/versions/001_initial_users.py` | Таблица `users` |
@@ -77,6 +78,7 @@
 | `alembic/versions/005_tags_and_search_prefs.py` | `tags`, `event_tags`, `seeking_tags`, `users.search_prefs` (JSONB); сидится стартовый набор тегов |
 | `alembic/versions/006_chat_links_and_notify_flags.py` | `events.chat_url`, `company_seekings.chat_url`, `event_participants.chat_invite_notified`, `company_seeking_responses.chat_invite_notified` |
 | `alembic/versions/007_unify_activities.py` | Слияние events+seekings в `activities`, event_participants+company_seeking_responses в `activity_members`, event_tags+seeking_tags в `activity_tags`. Копирование данных, дроп legacy-таблиц. Добавляет `visibility`. Для событий `expires_at = starts_at + 2h`. |
+| `alembic/versions/010_user_city_and_seed_cities.py` | `city_id` FK на `users` (backfill=Москва, NOT NULL), сид ~100 городов РФ |
 
 ## Админ-бот модерации
 

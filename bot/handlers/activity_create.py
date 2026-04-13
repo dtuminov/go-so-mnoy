@@ -33,7 +33,6 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.constants import MOSCOW_CITY_ID
 from bot.keyboards.main_menu import BTN_CANCEL, cancel_keyboard, main_menu_reply
 from bot.keyboards.tag_picker import tag_picker_keyboard
 from bot.services.activities import create_event_draft, create_seeking_draft
@@ -411,7 +410,7 @@ async def event_tags_done(
     await create_event_draft(
         session,
         creator_id=user.id,
-        city_id=MOSCOW_CITY_ID,
+        city_id=user.city_id,
         title=title,
         description=description,
         starts_at=starts_at,
@@ -710,7 +709,7 @@ async def seeking_tags_done(
     await create_seeking_draft(
         session,
         creator_id=user.id,
-        city_id=MOSCOW_CITY_ID,
+        city_id=user.city_id,
         title=title,
         body=body,
         expires_at=expires_at,

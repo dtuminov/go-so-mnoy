@@ -23,9 +23,23 @@ if [[ -z "$CONTAINER" ]]; then
   exit 1
 fi
 
-PSQL="docker exec -i $CONTAINER psql -U go_so_mnoy -d go_so_mnoy"
+# Определяем БД: --test → go_so_mnoy_test, иначе go_so_mnoy
+DB_NAME="go_so_mnoy"
+REMAINING_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --test|-t)
+      DB_NAME="go_so_mnoy_test"
+      ;;
+    *)
+      REMAINING_ARGS+=("$arg")
+      ;;
+  esac
+done
 
-MODE="${1:-}"
+PSQL="docker exec -i $CONTAINER psql -U go_so_mnoy -d $DB_NAME"
+
+MODE="${REMAINING_ARGS[0]:-}"
 
 run_sql() {
   echo "$1" | $PSQL

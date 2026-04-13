@@ -17,18 +17,29 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.fsm.state import State, StatesGroup, default_state
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.constants import ACTIVITY_EVENT, ACTIVITY_SEEKING
 from bot.keyboards.tag_picker import tag_picker_keyboard
 from bot.services.activity_feed import build_activity_feed_view
+from bot.keyboards.main_menu import MENU_BUTTONS
+from bot.services.cities import search_cities
 from bot.services.cover import edit_to_activity_cover
 from bot.services.search_prefs import (
     get_event_tag_filter,
+    get_filter_city_id,
     get_seeking_tag_filter,
     set_event_tag_filter,
+    set_filter_city,
     set_seeking_tag_filter,
 )
 from bot.services.tags import list_active_tags
@@ -39,6 +50,11 @@ router = Router(name="filters")
 
 TMP_EVENT_KEY = "filter_tmp_event_tag_ids"
 TMP_SEEKING_KEY = "filter_tmp_seeking_tag_ids"
+TMP_FILTER_CITY_KEY = "filter_tmp_city_id"
+
+
+class FilterCitySG(StatesGroup):
+    waiting_city = State()
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
@@ -69,34 +85,25 @@ async def _safe_edit_markup(callback: CallbackQuery, kb) -> None:
         pass
 
 
-async def _render_picker(
+async def _render_filter_menu(
     callback: CallbackQuery,
     session: AsyncSession,
     *,
     prefix: str,
-    selected_ids: set[int],
-    title: str,
+    city_name: str = "",
 ) -> None:
-    tags = await list_active_tags(session)
-    kb = tag_picker_keyboard(
-        tags=tags,
-        selected_ids=selected_ids,
-        prefix=prefix,
-        with_apply=True,
-        with_clear=True,
-        with_cancel=True,
-    )
-    text = (
-        f"<b>{title}</b>\n"
-        "Выбери один или несколько тегов. "
-        "Нажми ✅ Применить, чтобы обновить ленту."
-    )
+    """Меню фильтров: две кнопки — город и теги."""
+    city_label = f"📍 {city_name}" if city_name else "📍 Город"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=city_label, callback_data=f"{prefix}:city:change"),
+            InlineKeyboardButton(text="🏷 Теги", callback_data=f"{prefix}:tags"),
+        ],
+        [InlineKeyboardButton(text="✖️ Закрыть", callback_data=f"{prefix}:cancel")],
+    ])
+    text = "<b>🔎 Фильтры</b>\nВыбери что настроить:"
     if callback.message is None:
         return
-    # Лента — photo-карточка с обложкой; чтобы остаться в том же
-    # сообщении, правим caption (фон-картинка не меняется на время
-    # показа пикера). Когда юзер нажмёт Apply/Cancel — `_render_feed_after`
-    # вернёт на photo-карточку через `edit_message_media`.
     try:
         if callback.message.photo:
             await callback.message.edit_caption(
@@ -107,19 +114,52 @@ async def _render_picker(
                 text, reply_markup=kb, parse_mode=ParseMode.HTML,
             )
     except Exception:
-        await callback.message.answer(
-            text, reply_markup=kb, parse_mode=ParseMode.HTML,
-        )
+        pass
 
 
-def _empty_state_reset_kb(kind: str) -> InlineKeyboardMarkup:
-    """Inline-кнопка «🗑 Сбросить фильтр» для empty-state ленты."""
-    callback_data = "tp:e:reset" if kind == ACTIVITY_EVENT else "tp:s:reset"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🗑 Сбросить фильтр", callback_data=callback_data)],
-        ],
+async def _render_tag_picker(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    *,
+    prefix: str,
+    selected_ids: set[int],
+) -> None:
+    """Пикер тегов (второй уровень)."""
+    tags = await list_active_tags(session)
+    kb = tag_picker_keyboard(
+        tags=tags,
+        selected_ids=selected_ids,
+        prefix=prefix,
+        with_apply=True,
+        with_clear=True,
+        with_cancel=True,
     )
+    text = (
+        "<b>🏷 Фильтр по тегам</b>\n"
+        "Выбери теги и нажми ✅ Применить."
+    )
+    if callback.message is None:
+        return
+    try:
+        if callback.message.photo:
+            await callback.message.edit_caption(
+                caption=text, reply_markup=kb, parse_mode=ParseMode.HTML,
+            )
+        else:
+            await callback.message.edit_text(
+                text, reply_markup=kb, parse_mode=ParseMode.HTML,
+            )
+    except Exception:
+        pass
+
+
+def _empty_state_reset_kb(kind: str, *, has_city_filter: bool = False) -> InlineKeyboardMarkup:
+    """Inline-кнопки сброса для empty-state ленты."""
+    reset_cb = "tp:e:reset" if kind == ACTIVITY_EVENT else "tp:s:reset"
+    rows = [
+        [InlineKeyboardButton(text="🗑 Сбросить фильтры", callback_data=reset_cb)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _render_feed_after(
@@ -133,20 +173,23 @@ async def _render_feed_after(
 ) -> None:
     if callback.message is None:
         return
+    filter_city_id = get_filter_city_id(user)
+    city_id = filter_city_id if filter_city_id is not None else user.city_id
+    from bot.models import City
+    city = await session.get(City, city_id)
+    city_name = city.name if city else ""
     view = await build_activity_feed_view(
         session,
         kind=kind,
         index=0,
+        city_id=city_id,
+        city_name=city_name,
         tag_ids=tag_ids or None,
         viewer_user_id=user.id,
     )
     if view is None:
-        # Лента пустая. Сообщение с фильтрами/лентой — это photo-карточка
-        # активности, превратить её обратно в текст нельзя. Меняем
-        # caption на empty-state и (если фильтр активен) даём кнопку
-        # сброса прямо тут. Фон-картинка остаётся прежней — это
-        # компромисс ради того, чтобы UX оставался в одном сообщении.
-        empty_kb = _empty_state_reset_kb(kind) if tag_ids else None
+        has_any_filter = bool(tag_ids) or filter_city_id is not None
+        empty_kb = _empty_state_reset_kb(kind) if has_any_filter else None
         try:
             if callback.message.photo:
                 await callback.message.edit_caption(
@@ -176,6 +219,15 @@ async def _render_feed_after(
 # ──────────────────────────── EVENTS feed: tp:e:* ────────────────────────────
 
 
+async def _get_filter_city_name(session: AsyncSession, user) -> str:
+    """Возвращает имя города для фильтра (из search_prefs или профиля)."""
+    filter_city_id = get_filter_city_id(user)
+    city_id = filter_city_id if filter_city_id is not None else user.city_id
+    from bot.models import City
+    city = await session.get(City, city_id)
+    return city.name if city else ""
+
+
 @router.callback_query(F.data == "tp:e:open")
 async def on_events_filter_open(
     callback: CallbackQuery, session: AsyncSession, state: FSMContext,
@@ -184,13 +236,22 @@ async def on_events_filter_open(
         await callback.answer()
         return
     user = await upsert_telegram_user(session, callback.from_user)
+    city_name = await _get_filter_city_name(session, user)
+    await _render_filter_menu(callback, session, prefix="tp:e", city_name=city_name)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "tp:e:tags")
+async def on_events_tags_open(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
+) -> None:
+    if callback.from_user is None:
+        await callback.answer()
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
     current = set(get_event_tag_filter(user))
     await _save_tmp_ids(state, TMP_EVENT_KEY, current)
-    await _render_picker(
-        callback, session,
-        prefix="tp:e", selected_ids=current,
-        title="🔎 Фильтр ленты событий",
-    )
+    await _render_tag_picker(callback, session, prefix="tp:e", selected_ids=current)
     await callback.answer()
 
 
@@ -271,18 +332,18 @@ async def on_events_filter_cancel(
 async def on_events_filter_reset(
     callback: CallbackQuery, session: AsyncSession,
 ) -> None:
-    """Сброс сохранённого фильтра событий из empty-state-сообщения,
-    когда юзер не может добраться до пикера через ленту (она пустая)."""
+    """Сброс всех фильтров событий (теги + город)."""
     if callback.from_user is None or callback.message is None:
         await callback.answer()
         return
     user = await upsert_telegram_user(session, callback.from_user)
     await set_event_tag_filter(session, user=user, tag_ids=[])
+    await set_filter_city(session, user=user, city_id=None)
     await _render_feed_after(
         callback, session, user=user, kind=ACTIVITY_EVENT, tag_ids=[],
         empty_hint="Сейчас событий нет. Загляни позже.",
     )
-    await callback.answer("Фильтр сброшен")
+    await callback.answer("Фильтры сброшены")
 
 
 # ──────────────────────────── SEEKINGS feed: tp:s:* ──────────────────────────
@@ -296,13 +357,22 @@ async def on_seekings_filter_open(
         await callback.answer()
         return
     user = await upsert_telegram_user(session, callback.from_user)
+    city_name = await _get_filter_city_name(session, user)
+    await _render_filter_menu(callback, session, prefix="tp:s", city_name=city_name)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "tp:s:tags")
+async def on_seekings_tags_open(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext,
+) -> None:
+    if callback.from_user is None:
+        await callback.answer()
+        return
+    user = await upsert_telegram_user(session, callback.from_user)
     current = set(get_seeking_tag_filter(user))
     await _save_tmp_ids(state, TMP_SEEKING_KEY, current)
-    await _render_picker(
-        callback, session,
-        prefix="tp:s", selected_ids=current,
-        title="🔎 Фильтр заявок «ищу компанию»",
-    )
+    await _render_tag_picker(callback, session, prefix="tp:s", selected_ids=current)
     await callback.answer()
 
 
@@ -388,8 +458,104 @@ async def on_seekings_filter_reset(
         return
     user = await upsert_telegram_user(session, callback.from_user)
     await set_seeking_tag_filter(session, user=user, tag_ids=[])
+    await set_filter_city(session, user=user, city_id=None)
     await _render_feed_after(
         callback, session, user=user, kind=ACTIVITY_SEEKING, tag_ids=[],
         empty_hint="Сейчас заявок нет. Загляни позже.",
     )
-    await callback.answer("Фильтр сброшен")
+    await callback.answer("Фильтры сброшены")
+
+
+# ──────────────────────────── city in filter picker ────────────────────────────
+
+
+@router.callback_query(F.data.regexp(r"^tp:[es]:city:change$"), StateFilter(default_state))
+async def on_filter_city_change(
+    callback: CallbackQuery, state: FSMContext,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    prefix = callback.data[:4]  # "tp:e" or "tp:s"
+    await state.update_data(filter_city_prefix=prefix)
+    await state.set_state(FilterCitySG.waiting_city)
+    await callback.answer()
+    await callback.message.answer("Напиши название города:")
+
+
+@router.message(FilterCitySG.waiting_city, F.text, ~F.text.in_(MENU_BUTTONS))
+async def on_filter_city_search(
+    message: Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    query = (message.text or "").strip()
+    if len(query) < 2:
+        await message.answer("Напиши хотя бы 2 символа.")
+        return
+    cities = await search_cities(session, query)
+    if not cities:
+        await message.answer("Не нашёл такого города. Попробуй ещё раз.")
+        return
+    rows = [
+        [InlineKeyboardButton(text=c.name, callback_data=f"fltcity:{c.id}")]
+        for c in cities
+    ]
+    rows.append([InlineKeyboardButton(text="✖️ Отмена", callback_data="fltcity:cancel")])
+    await message.answer(
+        "Выбери город:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data == "fltcity:cancel", StateFilter(FilterCitySG.waiting_city))
+async def on_filter_city_cancel(
+    callback: CallbackQuery, state: FSMContext,
+) -> None:
+    await state.set_state(default_state)
+    await callback.answer("Отменено.")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("fltcity:"), StateFilter(FilterCitySG.waiting_city))
+async def on_filter_city_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession,
+) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        city_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+
+    user = await upsert_telegram_user(session, callback.from_user)
+    await set_filter_city(session, user=user, city_id=city_id)
+
+    data = await state.get_data()
+    prefix = data.get("filter_city_prefix", "tp:e")
+    await state.set_state(default_state)
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    city_name = await _get_filter_city_name(session, user)
+
+    # Определяем kind и tag_ids из prefix
+    if prefix == "tp:e":
+        kind = ACTIVITY_EVENT
+        tag_ids = get_event_tag_filter(user)
+    else:
+        kind = ACTIVITY_SEEKING
+        tag_ids = get_seeking_tag_filter(user)
+
+    await _render_feed_after(
+        callback, session, user=user, kind=kind,
+        tag_ids=tag_ids,
+        empty_hint="По текущим фильтрам ничего нет.",
+    )
+    await callback.answer(f"Город: {city_name}")

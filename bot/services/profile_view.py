@@ -69,6 +69,11 @@ def _profile_header(user: User) -> list[str]:
     lines = [f"<b>👤 {name}</b>"]
     if user.age:
         lines.append(f"Возраст: {user.age}")
+    try:
+        if user.city is not None:
+            lines.append(f"Город: {esc(user.city.name)}")
+    except Exception:
+        pass
     if user.bio:
         lines += ["", esc(user.bio)]
     return lines
@@ -89,6 +94,11 @@ async def build_hub_view(
 
     Пустые разделы не показываются вообще — чтобы не было шума.
     """
+    # Подгружаем город для отображения в шапке
+    try:
+        await session.refresh(user, ["city"])
+    except Exception:
+        pass
     lines = _profile_header(user)
 
     # Считаем заполненность разделов

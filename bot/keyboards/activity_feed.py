@@ -140,11 +140,13 @@ def format_activity_feed_text(
     active_filter: list[Tag] | None = None,
     author_name: str | None = None,
     author_age: int | None = None,
+    city_name: str = "",
 ) -> str:
+    city = esc(city_name) if city_name else "Москва"
     if activity.kind == ACTIVITY_EVENT:
-        header = "<b>События в Москве</b>"
+        header = f"<b>События · {city}</b>"
     else:
-        header = "<b>Ищут компанию · Москва</b>"
+        header = f"<b>Ищут компанию · {city}</b>"
     if active_filter:
         header += f"\n<i>🔎 фильтр: {esc(format_tags_inline(active_filter))}</i>"
     return (

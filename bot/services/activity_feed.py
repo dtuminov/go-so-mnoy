@@ -12,7 +12,6 @@ from bot.constants import (
     ACTIVITY_EVENT,
     ACTIVITY_SEEKING,
     MEMBER_PENDING,
-    MOSCOW_CITY_ID,
 )
 from bot.keyboards.activity_feed import (
     activity_feed_keyboard,
@@ -34,7 +33,8 @@ async def build_activity_feed_view(
     *,
     kind: str,
     index: int,
-    city_id: int = MOSCOW_CITY_ID,
+    city_id: int,
+    city_name: str = "",
     tag_ids: list[int] | None = None,
     viewer_user_id: int | None = None,
 ) -> tuple[str | None, str, InlineKeyboardMarkup] | None:
@@ -77,6 +77,7 @@ async def build_activity_feed_view(
         active_filter=active_filter,
         author_name=author_name,
         author_age=author_age,
+        city_name=city_name,
     )
     kb = activity_feed_keyboard(
         idx,

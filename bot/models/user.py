@@ -4,7 +4,7 @@ from datetime import datetime
 
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,9 +31,13 @@ class User(Base):
     avatar_file_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
     age: Mapped[int | None] = mapped_column(Integer(), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text(), nullable=True)
+    city_id: Mapped[int] = mapped_column(
+        ForeignKey("cities.id"), index=True, server_default="1",
+    )
     # {"event_tag_ids": [int, ...], "seeking_tag_ids": [int, ...]}
     search_prefs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    city: Mapped["City"] = relationship()
     created_activities: Mapped[list["Activity"]] = relationship(
         back_populates="creator",
     )

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Перезапуск бота: гасит экземпляры этого репо (по cwd), миграции Alembic, старт через .venv.
-# Запускай откуда угодно: ./restart.sh или bash /полный/путь/go-so-mnoy/restart.sh
+# Запускай откуда угодно: ./restart.sh -t или bash /полный/путь/go-so-mnoy/restart.sh -t
+#
+# ВАЖНО: без --test/-t скрипт НЕ запустится — прод крутится на сервере,
+# локально запускаем только тестового бота. Админ-бот локально не стартует
+# (он один, живёт на сервере), для теста апрувь через: ./scripts/approve_all.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,16 +20,17 @@ fi
 
 usage() {
   echo "Использование: $0 [опции]" >&2
-  echo "  (без опций)     — стоп ботов этого репо → alembic upgrade head → bot + admin_bot в foreground" >&2
-  echo "  --bg | -b       — то же, оба в фоне (логи: bot.log, admin_bot.log)" >&2
-  echo "  --skip-migrate  — не вызывать alembic (если БД недоступна и нужен только стоп)" >&2
+  echo "  --test | -t     — тестовый бот (.env.test, без admin_bot)" >&2
+  echo "  --bg | -b       — запуск в фоне (лог: bot.log)" >&2
+  echo "  --skip-migrate  — не вызывать alembic" >&2
+  echo "  --prod          — запуск прод-бота + admin_bot (ТОЛЬКО на сервере!)" >&2
   echo "  --help | -h     — эта справка" >&2
-  echo "" >&2
-  echo "Нужен .env с DATABASE_URL (Postgres), иначе alembic упадёт — подними docker compose." >&2
 }
 
 SKIP_MIGRATE=0
 RUN_BG=0
+USE_TEST=0
+FORCE_PROD=0
 for arg in "$@"; do
   case "$arg" in
     --help|-h)
@@ -38,6 +43,12 @@ for arg in "$@"; do
     --bg|-b)
       RUN_BG=1
       ;;
+    --test|-t)
+      USE_TEST=1
+      ;;
+    --prod)
+      FORCE_PROD=1
+      ;;
     *)
       echo "restart.sh: неизвестный аргумент: $arg" >&2
       usage
@@ -45,6 +56,23 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+# Защита: без флагов — не запускаем
+if [[ "$USE_TEST" -eq 0 && "$FORCE_PROD" -eq 0 ]]; then
+  echo "restart.sh: ❌ Укажи режим:" >&2
+  echo "  ./restart.sh -t       — тестовый бот (локальная разработка)" >&2
+  echo "  ./restart.sh --prod   — прод (только на сервере!)" >&2
+  exit 1
+fi
+
+if [[ "$USE_TEST" -eq 1 ]]; then
+  export ENV_FILE="${ROOT}/.env.test"
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "restart.sh: нет ${ENV_FILE}" >&2
+    exit 1
+  fi
+  echo "restart.sh: 🧪 тестовый режим ($ENV_FILE)"
+fi
 
 # PID-ы процессов с командной строкой «python -m bot» или «python -m admin_bot»,
 # cwd = корень этого проекта
@@ -74,7 +102,7 @@ stop_bots() {
     echo "restart.sh: процессов «python -m bot» с cwd=$ROOT не найдено"
     return 0
   fi
-  echo "restart.sh: останавливаю bot + admin_bot PID: $pids"
+  echo "restart.sh: останавливаю PID: $pids"
   for pid in $pids; do
     kill -TERM "$pid" 2>/dev/null || true
   done
@@ -99,6 +127,21 @@ else
   echo "restart.sh: пропуск миграций (--skip-migrate)"
 fi
 
+# ── Тестовый режим: только основной бот, без admin_bot ──
+if [[ "$USE_TEST" -eq 1 ]]; then
+  if [[ "$RUN_BG" -eq 1 ]]; then
+    BOT_LOG="${ROOT}/bot.log"
+    echo "restart.sh: 🧪 тест-бот в фоне (лог: $BOT_LOG)"
+    nohup "$VENV_PY" -m bot >>"$BOT_LOG" 2>&1 &
+    echo "bot PID: $!"
+  else
+    echo "restart.sh: 🧪 тест-бот foreground (Ctrl+C — стоп)"
+    exec "$VENV_PY" -m bot
+  fi
+  exit 0
+fi
+
+# ── Прод: оба бота ──
 if [[ "$RUN_BG" -eq 1 ]]; then
   BOT_LOG="${ROOT}/bot.log"
   ADMIN_LOG="${ROOT}/admin_bot.log"
@@ -108,7 +151,7 @@ if [[ "$RUN_BG" -eq 1 ]]; then
   nohup "$VENV_PY" -m admin_bot >>"$ADMIN_LOG" 2>&1 &
   echo "admin_bot PID: $! (лог: $ADMIN_LOG)"
 else
-  echo "restart.sh: foreground — оба бота (Ctrl+C — стоп). Фон: $0 --bg"
+  echo "restart.sh: foreground — оба бота (Ctrl+C — стоп)"
   "$VENV_PY" -m admin_bot &
   ADMIN_PID=$!
   trap 'kill $ADMIN_PID 2>/dev/null; wait $ADMIN_PID 2>/dev/null' EXIT
