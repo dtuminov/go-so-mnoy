@@ -70,7 +70,7 @@
 | `bot/handlers/activity_chat.py` | Управление настройками активности из профиля: chat_url (`actch:*`, `EditChatSG`, broadcast при первом заполнении) и visibility (`avis:show/set:*`) |
 | `bot/handlers/profile.py` | FSM анкеты (город → фото → возраст → bio); `profile:edit`; авто-вступление в `pending_join_activity_id` после анкеты |
 | `bot/handlers/filters.py` | Пикер тег-фильтров: `tp:e:*` (events lente) и `tp:s:*` (seekings lente) — open/toggle/apply/clear/cancel; пишет в `users.search_prefs` |
-| `bot/utils/` | Форматирование дат (МСК), парсер даты для FSM, `chat_link.py` — валидатор/нормализатор Telegram-ссылок |
+| `bot/utils/` | Форматирование дат (МСК), парсер даты для FSM, `chat_link.py` — валидатор/нормализатор Telegram-ссылок, `maps.py` — парсинг ссылок Яндекс Карт |
 | `alembic/versions/001_initial_users.py` | Таблица `users` |
 | `alembic/versions/002_domain_core.py` | `cities`, `events`, `event_participants`, `company_seekings`, `company_seeking_responses`; поля профиля в `users` |
 | `alembic/versions/003_user_profile.py` | `avatar_file_id`, `age`, `bio` в `users` |

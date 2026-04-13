@@ -47,7 +47,9 @@ async def _notify_new_pending(bot: Bot, factory: async_sessionmaker) -> None:
             if activity.starts_at:
                 lines.append(f"Начало: {format_datetime_msk(activity.starts_at)}")
             if activity.place_text:
-                lines.append(f"Место: {esc(activity.place_text)}")
+                from urllib.parse import quote
+                maps_url = f"https://yandex.ru/maps/?text={quote(activity.place_text)}"
+                lines.append(f'Место: <a href="{maps_url}">{esc(activity.place_text)}</a>')
             lines.append(f"\n/pending — открыть очередь модерации")
             text = "\n".join(lines)
 

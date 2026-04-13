@@ -50,7 +50,9 @@ def _activity_card(activity: Activity, creator: User | None) -> str:
         lines.append(f"Начало: {format_datetime_msk(activity.starts_at)}")
     lines.append(f"Истекает: {format_datetime_msk(activity.expires_at)}")
     if activity.place_text:
-        lines.append(f"Место: {esc(activity.place_text)}")
+        from urllib.parse import quote
+        maps_url = f"https://yandex.ru/maps/?text={quote(activity.place_text)}"
+        lines.append(f'Место: <a href="{maps_url}">{esc(activity.place_text)}</a>')
     if activity.tags:
         tag_names = ", ".join(t.name for t in activity.tags)
         lines.append(f"Теги: {esc(tag_names)}")

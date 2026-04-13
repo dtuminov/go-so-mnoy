@@ -15,6 +15,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from bot.constants import ACTIVITY_EVENT
 from bot.keyboards.tag_picker import format_tags_inline
 from bot.models import Activity, Tag
+from urllib.parse import quote
+
 from bot.utils.formatting import esc, format_datetime_msk
 
 
@@ -113,7 +115,11 @@ def format_activity_card_text(
 
     if activity.kind == ACTIVITY_EVENT:
         when_line = format_datetime_msk(activity.starts_at)
-        place_line = f"\n📍 {esc(activity.place_text)}" if activity.place_text else ""
+        if activity.place_text:
+            maps_url = f"https://yandex.ru/maps/?text={quote(activity.place_text)}"
+            place_line = f'\n📍 <a href="{maps_url}">{esc(activity.place_text)}</a>'
+        else:
+            place_line = ""
         members_line = f"\n👥 Участников: {members}"
     else:
         when_line = f"⏳ до {format_datetime_msk(activity.expires_at)}"

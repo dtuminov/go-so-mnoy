@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
@@ -49,7 +50,7 @@ async def _notify_published(bot: Bot, factory: async_sessionmaker) -> None:
                         f"✅ Твоё событие опубликовано!\n\n"
                         f"<b>{esc(activity.title)}</b>\n"
                         f"{format_datetime_msk(activity.starts_at)}\n"
-                        f"📍 {esc(activity.place_text)}\n\n"
+                        f'📍 <a href="https://yandex.ru/maps/?text={quote(activity.place_text)}">{esc(activity.place_text)}</a>\n\n'
                         f"Оно появилось в ленте — люди уже могут записываться."
                     )
                 else:
@@ -163,7 +164,7 @@ async def _send_reminders(bot: Bot, factory: async_sessionmaker) -> None:
                         f"⏰ <b>Через ~2 часа</b> начинается событие, на которое ты записан!\n\n"
                         f"<b>{esc(event.title)}</b>\n"
                         f"{format_datetime_msk(event.starts_at)}\n"
-                        f"📍 {esc(event.place_text)}",
+                        f'📍 <a href="https://yandex.ru/maps/?text={quote(event.place_text)}">{esc(event.place_text)}</a>',
                         parse_mode=ParseMode.HTML,
                     )
                 except Exception as e:

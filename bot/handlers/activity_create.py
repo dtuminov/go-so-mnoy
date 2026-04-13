@@ -289,12 +289,27 @@ async def event_starts(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(starts_at_iso=starts_at.isoformat())
     await state.set_state(CreateEventSG.place)
-    await message.answer("Шаг 5/7: <b>место</b> (адрес, район или «узнаем в чате»).")
+    await message.answer(
+        "Шаг 5/7: <b>место</b> — напиши адрес или скинь ссылку из Яндекс Карт.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(CreateEventSG.place, F.text)
 async def event_place(message: Message, state: FSMContext) -> None:
-    place = (message.text or "").strip()
+    from bot.utils.maps import extract_place_from_url, is_maps_url
+
+    raw = (message.text or "").strip()
+    if is_maps_url(raw):
+        place = await extract_place_from_url(raw)
+        if not place:
+            await message.answer(
+                "Не удалось распознать место из ссылки. "
+                "Напиши название текстом или попробуй другую ссылку.",
+            )
+            return
+    else:
+        place = raw
     if len(place) < 2:
         await message.answer("Укажи место чуть подробнее.")
         return

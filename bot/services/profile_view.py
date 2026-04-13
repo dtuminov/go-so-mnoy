@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -306,7 +308,8 @@ async def _detail_body(
     if activity.kind == ACTIVITY_EVENT:
         lines.append(format_datetime_msk(activity.starts_at))
         if activity.place_text:
-            lines.append(f"📍 {esc(activity.place_text)}")
+            maps_url = f"https://yandex.ru/maps/?text={quote(activity.place_text)}"
+            lines.append(f'📍 <a href="{maps_url}">{esc(activity.place_text)}</a>')
     else:
         lines.append(f"⏳ до {format_datetime_msk(activity.expires_at)}")
 
