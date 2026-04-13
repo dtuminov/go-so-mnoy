@@ -20,6 +20,7 @@ from bot.constants import ACTIVITY_EVENT, ACTIVITY_PUBLISHED
 from bot.keyboards.main_menu import MENU_BUTTONS, main_menu_reply
 from bot.services.activities import get_activity, join_activity
 from bot.services.cities import search_cities
+from bot.services.search_prefs import set_filter_city
 from bot.services.users import (
     set_user_city,
     update_user_profile,
@@ -255,6 +256,7 @@ async def profile_city_location(
     city = cities[0]
     user = await upsert_user_from_message(session, message)
     await set_user_city(session, user_id=user.id, city_id=city.id)
+    await set_filter_city(session, user=user, city_id=None)  # сброс фильтра
     data = await state.get_data()
 
     if data.get("edit_single") == "city":
@@ -311,6 +313,7 @@ async def profile_city_pick(
 
     user = await upsert_telegram_user(session, callback.from_user)
     await set_user_city(session, user_id=user.id, city_id=city_id)
+    await set_filter_city(session, user=user, city_id=None)  # сброс фильтра
     data = await state.get_data()
     await callback.answer()
     try:
