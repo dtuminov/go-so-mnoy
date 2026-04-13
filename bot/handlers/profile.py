@@ -9,7 +9,10 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,8 +51,16 @@ def _city_step_text(*, activity_title: str | None, editing: bool = False) -> str
         prefix = "Чтобы участвовать во встречах, заполни <b>анкету</b>.\n\n"
     return (
         prefix
-        + "<b>Шаг 1/4</b>: напиши название своего <b>города</b>.\n"
+        + "<b>Шаг 1/4</b>: отправь геолокацию или напиши название <b>города</b>.\n"
         "Отмена: /cancel"
+    )
+
+
+def _city_location_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить геолокацию", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 
@@ -81,6 +92,7 @@ async def begin_profile_flow(
     await target_message.answer(
         _city_step_text(activity_title=activity_title, editing=editing),
         parse_mode=ParseMode.HTML,
+        reply_markup=_city_location_keyboard(),
     )
 
 
@@ -147,7 +159,8 @@ async def on_edit_city(callback: CallbackQuery, state: FSMContext) -> None:
     except Exception:
         pass
     await callback.message.answer(
-        "Напиши название нового города:",
+        "Отправь геолокацию или напиши название города:",
+        reply_markup=_city_location_keyboard(),
     )
 
 
@@ -212,6 +225,55 @@ async def profile_cancel(message: Message, state: FSMContext) -> None:
 
 
 # ── шаги FSM ─────────────────────────────────────────────────────────────────
+
+
+@router.message(ProfileSG.city, F.location)
+async def profile_city_location(
+    message: Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    """Юзер отправил геолокацию — определяем город."""
+    from bot.utils.geo import city_name_by_coords
+
+    lat = message.location.latitude
+    lon = message.location.longitude
+    city_name = await city_name_by_coords(lat, lon)
+    if not city_name:
+        await message.answer(
+            "Не удалось определить город по геолокации. Напиши название текстом.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    cities = await search_cities(session, city_name, limit=1)
+    if not cities:
+        await message.answer(
+            f"Город «{city_name}» не найден в базе. Попробуй написать название текстом.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    city = cities[0]
+    user = await upsert_user_from_message(session, message)
+    await set_user_city(session, user_id=user.id, city_id=city.id)
+    data = await state.get_data()
+
+    if data.get("edit_single") == "city":
+        await state.clear()
+        await message.answer(
+            f"Город: {city.name} ✓",
+            reply_markup=main_menu_reply(),
+        )
+        return
+
+    await state.update_data(city_id=city.id)
+    await state.set_state(ProfileSG.avatar)
+    await message.answer(
+        f"Город: {city.name} ✓\n\n"
+        "<b>Шаг 2/4</b>: отправь <b>одно фото</b> (как картинку, не файлом).\n"
+        "Отмена: /cancel",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu_reply(),
+    )
 
 
 @router.message(ProfileSG.city, F.text, ~F.text.in_(MENU_BUTTONS))

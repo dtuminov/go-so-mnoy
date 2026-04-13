@@ -480,7 +480,65 @@ async def on_filter_city_change(
     await state.update_data(filter_city_prefix=prefix)
     await state.set_state(FilterCitySG.waiting_city)
     await callback.answer()
-    await callback.message.answer("Напиши название города:")
+    from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📍 Отправить геолокацию", request_location=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+    await callback.message.answer(
+        "Отправь геолокацию или напиши название города:",
+        reply_markup=kb,
+    )
+
+
+@router.message(FilterCitySG.waiting_city, F.location)
+async def on_filter_city_location(
+    message: Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    """Юзер отправил геолокацию для смены города в фильтре."""
+    from aiogram.types import ReplyKeyboardRemove
+    from bot.utils.geo import city_name_by_coords
+
+    lat = message.location.latitude
+    lon = message.location.longitude
+    city_name = await city_name_by_coords(lat, lon)
+    if not city_name:
+        await message.answer(
+            "Не удалось определить город. Напиши название текстом.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    cities = await search_cities(session, city_name, limit=1)
+    if not cities:
+        await message.answer(
+            f"Город «{city_name}» не найден в базе. Попробуй написать название.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    city = cities[0]
+    user = await upsert_telegram_user(session, message.from_user)
+    await set_filter_city(session, user=user, city_id=city.id)
+
+    data = await state.get_data()
+    prefix = data.get("filter_city_prefix", "tp:e")
+    await state.set_state(default_state)
+
+    if prefix == "tp:e":
+        kind = ACTIVITY_EVENT
+        tag_ids = get_event_tag_filter(user)
+    else:
+        kind = ACTIVITY_SEEKING
+        tag_ids = get_seeking_tag_filter(user)
+
+    from bot.keyboards.main_menu import main_menu_reply
+    btn = "📍 Найти событие" if kind == ACTIVITY_EVENT else "🤝 Найти компанию"
+    await message.answer(
+        f"Город фильтра: {city.name} ✓\nНажми «{btn}» чтобы обновить ленту.",
+        reply_markup=main_menu_reply(),
+    )
 
 
 @router.message(FilterCitySG.waiting_city, F.text, ~F.text.in_(MENU_BUTTONS))
