@@ -18,6 +18,10 @@ class Settings(BaseSettings):
         default=None,
         description="Username бота без @; для deep links из канала (пока опционально).",
     )
+    twogis_api_key: str | None = Field(
+        default=None,
+        description="API-ключ 2GIS для подсказок мест и организаций.",
+    )
 
     @field_validator("bot_username", mode="before")
     @classmethod
