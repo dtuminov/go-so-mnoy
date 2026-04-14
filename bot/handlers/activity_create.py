@@ -179,10 +179,13 @@ async def start_create_from_template(
     place_info = f"\n📍 {esc(template.place_text)}" if template.place_text else ""
     cover_hint = "Обложка из шаблона — можешь заменить фото или пропустить." if template.cover_file_id else "Отправь фото обложки или пропусти."
     await target.answer(
-        f"Создаём событие: <b>{esc(template.title)}</b>{place_info}\n\n"
-        f"{cover_hint}",
-        reply_markup=_skip_kb(CE_COVER_SKIP_CB),
+        f"Создаём событие: <b>{esc(template.title)}</b>{place_info}",
+        reply_markup=cancel_keyboard(),
         parse_mode=ParseMode.HTML,
+    )
+    await target.answer(
+        cover_hint,
+        reply_markup=_skip_kb(CE_COVER_SKIP_CB),
     )
 
 
