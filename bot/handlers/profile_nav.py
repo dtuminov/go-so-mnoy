@@ -15,10 +15,21 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
-from aiogram.types import CallbackQuery, InputMediaPhoto
+from aiogram.filters import StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup, default_state
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.services.activities import get_activity
+from bot.keyboards.main_menu import MENU_BUTTONS
+from bot.services.cities import search_cities
 from bot.services.cover import edit_to_activity_cover
 from bot.services.member_carousel import (
     CarouselContext,
@@ -33,7 +44,7 @@ from bot.services.profile_view import (
     build_hub_view,
     build_section_view,
 )
-from bot.services.users import upsert_telegram_user
+from bot.services.users import set_user_city, upsert_telegram_user
 
 router = Router(name="profile_nav")
 
@@ -266,3 +277,86 @@ async def on_profile_member(
         photo_file_id=photo_id,
     )
     await callback.answer()
+
+
+# ──────────────────────────── change city ─────────────────────────────────
+
+
+class ChangeCitySG(StatesGroup):
+    waiting_city = State()
+
+
+def _city_results_keyboard(cities: list) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=c.name, callback_data=f"chcity:{c.id}")]
+        for c in cities
+    ]
+    rows.append([InlineKeyboardButton(text="↩️ Отмена", callback_data="chcity:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "prf:city", StateFilter(default_state))
+async def on_change_city(
+    callback: CallbackQuery, state: FSMContext,
+) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    await callback.answer()
+    await state.set_state(ChangeCitySG.waiting_city)
+    await callback.message.answer(
+        "Напиши название нового города:",
+    )
+
+
+@router.message(ChangeCitySG.waiting_city, F.text, ~F.text.in_(MENU_BUTTONS))
+async def on_city_search(
+    message: Message, state: FSMContext, session: AsyncSession,
+) -> None:
+    query = (message.text or "").strip()
+    if len(query) < 2:
+        await message.answer("Напиши хотя бы 2 символа названия города.")
+        return
+    cities = await search_cities(session, query)
+    if not cities:
+        await message.answer(
+            "Не нашёл такого города. Попробуй ещё раз.",
+        )
+        return
+    await message.answer(
+        "Выбери город:",
+        reply_markup=_city_results_keyboard(cities),
+    )
+
+
+@router.callback_query(F.data == "chcity:cancel", StateFilter(ChangeCitySG.waiting_city))
+async def on_city_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Отменено.")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data.startswith("chcity:"), StateFilter(ChangeCitySG.waiting_city))
+async def on_city_pick(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession,
+) -> None:
+    if callback.from_user is None or callback.message is None:
+        await callback.answer()
+        return
+    try:
+        city_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.answer()
+        return
+
+    user = await upsert_telegram_user(session, callback.from_user)
+    await set_user_city(session, user_id=user.id, city_id=city_id)
+    await state.clear()
+    await callback.answer("Город обновлён!")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass

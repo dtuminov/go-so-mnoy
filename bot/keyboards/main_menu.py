@@ -6,6 +6,8 @@ BTN_CREATE_ACTIVITY = "➕ Создать активность"
 BTN_MY_PROFILE = "👤 Мой профиль"
 BTN_CANCEL = "❌ Отменить"
 
+MENU_BUTTONS = {BTN_FIND_EVENTS, BTN_FIND_COMPANY, BTN_CREATE_ACTIVITY, BTN_MY_PROFILE}
+
 
 def main_menu_reply() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(

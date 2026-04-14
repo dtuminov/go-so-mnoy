@@ -55,6 +55,7 @@ from bot.services.notifications import (
 from bot.services.profile_view import rerender_profile_to_hub
 from bot.services.search_prefs import (
     get_event_tag_filter,
+    get_filter_city_id,
     get_seeking_tag_filter,
 )
 from bot.services.users import (
@@ -68,6 +69,19 @@ router = Router(name="activity")
 
 
 # ──────────────────────────── helpers ────────────────────────────────────────
+
+
+def _effective_city_id(user) -> int:
+    """Возвращает city_id для фильтра (из search_prefs или профиля)."""
+    filter_city_id = get_filter_city_id(user)
+    return filter_city_id if filter_city_id is not None else user.city_id
+
+
+async def _effective_city_name(session, user) -> str:
+    """Возвращает имя города для ленты."""
+    from bot.models import City
+    city = await session.get(City, _effective_city_id(user))
+    return city.name if city else ""
 
 
 def _tag_filter(user, kind: str) -> list[int]:
@@ -147,8 +161,9 @@ async def _rerender_feed_card(
     if callback.message is None:
         return
     tag_ids = _tag_filter(user, activity.kind) or None
+    city_name = await _effective_city_name(session, user)
     activities = await list_published_activities(
-        session, kind=activity.kind, tag_ids=tag_ids,
+        session, kind=activity.kind, city_id=_effective_city_id(user), tag_ids=tag_ids,
     )
     idx = next(
         (i for i, a in enumerate(activities) if a.id == activity.id),
@@ -158,6 +173,8 @@ async def _rerender_feed_card(
         session,
         kind=activity.kind,
         index=idx,
+        city_id=_effective_city_id(user),
+        city_name=city_name,
         tag_ids=tag_ids,
         viewer_user_id=user.id,
     )
@@ -187,10 +204,13 @@ async def on_feed_page(callback: CallbackQuery, session: AsyncSession) -> None:
         await callback.answer("Некорректные данные", show_alert=True)
         return
     user = await upsert_telegram_user(session, callback.from_user)
+    city_name = await _effective_city_name(session, user)
     view = await build_activity_feed_view(
         session,
         kind=kind,
         index=idx,
+        city_id=_effective_city_id(user),
+        city_name=city_name,
         tag_ids=_tag_filter(user, kind) or None,
         viewer_user_id=user.id,
     )
@@ -219,10 +239,13 @@ async def on_feed_counter(callback: CallbackQuery, session: AsyncSession) -> Non
         await callback.answer()
         return
     user = await upsert_telegram_user(session, callback.from_user)
+    city_name = await _effective_city_name(session, user)
     view = await build_activity_feed_view(
         session,
         kind=kind,
         index=idx,
+        city_id=_effective_city_id(user),
+        city_name=city_name,
         tag_ids=_tag_filter(user, kind) or None,
         viewer_user_id=user.id,
     )

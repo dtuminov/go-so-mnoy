@@ -24,6 +24,7 @@ async def upsert_telegram_user(session: AsyncSession, tg: TgUser) -> User:
             username=tg.username,
             first_name=tg.first_name,
             last_name=tg.last_name,
+            city_id=1,  # дефолт для новых; юзер сменит в анкете
         )
         .on_conflict_do_update(
             index_elements=[User.telegram_id],
@@ -64,6 +65,16 @@ async def update_user_profile(
             bio=bio,
             updated_at=func.now(),
         ),
+    )
+
+
+async def set_user_city(
+    session: AsyncSession, *, user_id: int, city_id: int,
+) -> None:
+    await session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(city_id=city_id, updated_at=func.now()),
     )
 
 

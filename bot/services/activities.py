@@ -17,7 +17,6 @@ from bot.constants import (
     ACTIVITY_SEEKING,
     MEMBER_JOINED,
     MEMBER_PENDING,
-    MOSCOW_CITY_ID,
     VISIBILITY_OPEN,
     VISIBILITY_PRIVATE,
 )
@@ -35,7 +34,7 @@ async def list_published_activities(
     session: AsyncSession,
     *,
     kind: str,
-    city_id: int = MOSCOW_CITY_ID,
+    city_id: int,
     tag_ids: list[int] | None = None,
     limit: int = 100,
 ) -> list[Activity]:
@@ -47,19 +46,20 @@ async def list_published_activities(
         - `'seeking'` — отсортировано по `created_at` DESC, фильтр
           `expires_at >= now()`.
 
+    Если `city_id is None` — без фильтра по городу (все города).
     Если `tag_ids` непустой — оставляем активности, у которых есть
     хотя бы один из выбранных тегов (OR-семантика).
     """
     now = datetime.now(timezone.utc)
     stmt = (
         select(Activity)
-        .where(Activity.city_id == city_id)
         .where(Activity.kind == kind)
         .where(Activity.status == ACTIVITY_PUBLISHED)
         .where(Activity.expires_at >= now)
         .options(selectinload(Activity.tags))
         .limit(limit)
     )
+    stmt = stmt.where(Activity.city_id == city_id)
     if kind == ACTIVITY_EVENT:
         stmt = stmt.order_by(Activity.starts_at.asc())
     else:

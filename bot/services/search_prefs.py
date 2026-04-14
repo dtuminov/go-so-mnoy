@@ -18,6 +18,7 @@ from bot.models import User
 
 EVENT_KEY = "event_tag_ids"
 SEEKING_KEY = "seeking_tag_ids"
+FILTER_CITY_KEY = "filter_city_id"
 
 
 def _prefs(user: User) -> dict:
@@ -80,3 +81,31 @@ async def clear_event_tag_filter(session: AsyncSession, *, user: User) -> None:
 
 async def clear_seeking_tag_filter(session: AsyncSession, *, user: User) -> None:
     await set_seeking_tag_filter(session, user=user, tag_ids=[])
+
+
+def get_filter_city_id(user: User) -> int | None:
+    raw = _prefs(user).get(FILTER_CITY_KEY)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+async def set_filter_city(
+    session: AsyncSession,
+    *,
+    user: User,
+    city_id: int | None,
+) -> None:
+    prefs = _prefs(user)
+    if city_id is not None:
+        prefs[FILTER_CITY_KEY] = city_id
+    else:
+        prefs.pop(FILTER_CITY_KEY, None)
+    new_value = prefs or None
+    await session.execute(
+        update(User).where(User.id == user.id).values(search_prefs=new_value),
+    )
+    user.search_prefs = new_value
