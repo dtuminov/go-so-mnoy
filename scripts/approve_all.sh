@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Определяем имя контейнера Postgres (первый, что запущен с нашим образом)
-CONTAINER=$(docker ps --filter "name=postgres" --filter "ancestor=postgres:16" --format "{{.Names}}" | head -1)
+CONTAINER=$(docker ps --filter "name=postgres" --format "{{.Names}}" | head -1)
 if [[ -z "$CONTAINER" ]]; then
   # Fallback: ищем по имени проекта
   CONTAINER=$(docker ps --filter "name=go-so-mnoy" --format "{{.Names}}" | grep postgres | head -1)

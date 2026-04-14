@@ -295,11 +295,88 @@ async def event_starts(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("place:pick:"), StateFilter(CreateEventSG.place))
+async def event_place_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    """Юзер выбрал адрес из подсказок Dadata."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    idx_raw = callback.data.split(":", 2)[2]
+    try:
+        idx = int(idx_raw)
+    except ValueError:
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    suggestions = data.get("_place_suggestions", [])
+    if idx < 0 or idx >= len(suggestions):
+        await callback.answer()
+        return
+    place = suggestions[idx]
+    await state.update_data(place_text=place[:500])
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    await state.set_state(CreateEventSG.chat_url)
+    await callback.message.answer(
+        "Шаг 6/7: <b>ссылка на чат события</b> (например, "
+        "<code>https://t.me/...</code>) — чтобы участники сразу могли попасть в обсуждение.\n\n"
+        "Можно пропустить и добавить позже в профиле.",
+        reply_markup=_skip_kb(CE_CHAT_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.callback_query(F.data == "place:retry", StateFilter(CreateEventSG.place))
+async def event_place_retry(callback: CallbackQuery) -> None:
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer("Напиши адрес заново:")
+
+
+@router.callback_query(F.data == "place:keep", StateFilter(CreateEventSG.place))
+async def event_place_keep(callback: CallbackQuery, state: FSMContext) -> None:
+    """Юзер оставляет свой текст как есть."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    raw = data.get("_place_raw", "")
+    if not raw:
+        await callback.answer("Напиши адрес заново.")
+        return
+    await state.update_data(place_text=raw[:500])
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await state.set_state(CreateEventSG.chat_url)
+    await callback.message.answer(
+        "Шаг 6/7: <b>ссылка на чат события</b> (например, "
+        "<code>https://t.me/...</code>) — чтобы участники сразу могли попасть в обсуждение.\n\n"
+        "Можно пропустить и добавить позже в профиле.",
+        reply_markup=_skip_kb(CE_CHAT_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 @router.message(CreateEventSG.place, F.text)
 async def event_place(message: Message, state: FSMContext) -> None:
+    from bot.config import get_settings
+    from bot.services.place_suggest import suggest_places
     from bot.utils.maps import extract_place_from_url, is_maps_url
 
     raw = (message.text or "").strip()
+
+    # Ссылка на карты
     if is_maps_url(raw):
         place = await extract_place_from_url(raw)
         if not place:
@@ -308,12 +385,46 @@ async def event_place(message: Message, state: FSMContext) -> None:
                 "Напиши название текстом или попробуй другую ссылку.",
             )
             return
-    else:
-        place = raw
-    if len(place) < 2:
+        await state.update_data(place_text=place[:500])
+        await state.set_state(CreateEventSG.chat_url)
+        await message.answer(
+            "Шаг 6/7: <b>ссылка на чат события</b> (например, "
+            "<code>https://t.me/...</code>) — чтобы участники сразу могли попасть в обсуждение.\n\n"
+            "Можно пропустить и добавить позже в профиле.",
+            reply_markup=_skip_kb(CE_CHAT_SKIP_CB),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if len(raw) < 2:
         await message.answer("Укажи место чуть подробнее.")
         return
-    await state.update_data(place_text=place[:500])
+
+    # Подсказки 2GIS (организации и места)
+    api_key = get_settings().twogis_api_key
+    if api_key:
+        suggestions = await suggest_places(raw, api_key, count=4)
+        if suggestions:
+            fulls = [s.full for s in suggestions]
+            await state.update_data(_place_suggestions=fulls, _place_raw=raw)
+            rows = [
+                [InlineKeyboardButton(
+                    text=s.name[:60],
+                    callback_data=f"place:pick:{i}",
+                )]
+                for i, s in enumerate(suggestions)
+            ]
+            keep_label = f"✅ Оставить «{raw[:30]}»"
+            rows.append([InlineKeyboardButton(text=keep_label, callback_data="place:keep")])
+            rows.append([InlineKeyboardButton(text="✏️ Ввести заново", callback_data="place:retry")])
+            await message.answer(
+                "Выбери место или оставь как есть:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+            return
+
+    # Без API или нет подсказок — берём как есть
+    await state.update_data(place_text=raw[:500])
     await state.set_state(CreateEventSG.chat_url)
     await message.answer(
         "Шаг 6/7: <b>ссылка на чат события</b> (например, "
