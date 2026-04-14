@@ -1,8 +1,18 @@
-"""Модерация активностей: список pending_review, approve / reject."""
+"""Модерация активностей: список pending_review, approve / reject.
+Создание шаблонов для deep link из канала.
+"""
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, Message
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup, default_state
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +26,7 @@ from bot.constants import (
     ACTIVITY_PUBLISHED,
     ACTIVITY_REJECTED,
 )
-from bot.models import Activity, ActivityMember, User
+from bot.models import Activity, ActivityMember, EventTemplate, User
 from bot.utils.formatting import esc, format_datetime_msk
 
 router = Router(name="moderation")
@@ -82,7 +92,10 @@ async def cmd_start(message: Message) -> None:
         "/stats — краткая статистика\n"
         "/users — список пользователей\n"
         "/activities — список всех активностей\n"
-        "/delete <code>ID</code> — удалить активность",
+        "/delete <code>ID</code> — удалить активность\n\n"
+        "<b>Шаблоны для канала:</b>\n"
+        "/template — создать шаблон события\n"
+        "/templates — список шаблонов с deep link",
     )
 
 
@@ -353,3 +366,205 @@ async def cb_delete(callback: CallbackQuery, session: AsyncSession) -> None:
         reply_markup=None,
     )
     await callback.answer("Удалено 🗑")
+
+
+# ──────────────────────────── event templates ─────────────────────────────────
+
+
+class TemplateSG(StatesGroup):
+    title = State()
+    place = State()
+    cover = State()
+    description = State()
+
+
+@router.message(Command("template"), StateFilter(default_state))
+async def cmd_template(message: Message, state: FSMContext) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    await state.set_state(TemplateSG.title)
+    await message.answer("Название шаблона (например, «Йога на Арбате»):")
+
+
+@router.message(TemplateSG.title, F.text)
+async def template_title(message: Message, state: FSMContext) -> None:
+    title = (message.text or "").strip()
+    if len(title) < 3:
+        await message.answer("Минимум 3 символа.")
+        return
+    await state.update_data(tpl_title=title[:255])
+    await state.set_state(TemplateSG.place)
+
+    from bot.config import get_settings
+    api_key = get_settings().twogis_api_key
+    if api_key:
+        await message.answer(
+            "Место (адрес или название) — будут подсказки 2GIS.\n"
+            "Или /skip чтобы оставить пустым.",
+        )
+    else:
+        await message.answer("Место (адрес). Или /skip чтобы пропустить:")
+
+
+@router.message(TemplateSG.place, Command("skip"))
+async def template_place_skip(message: Message, state: FSMContext) -> None:
+    await state.update_data(tpl_place="")
+    await state.set_state(TemplateSG.cover)
+    await message.answer("Обложка — отправь фото. Или /skip:")
+
+
+@router.message(TemplateSG.place, F.text)
+async def template_place(message: Message, state: FSMContext) -> None:
+    raw = (message.text or "").strip()
+    if len(raw) < 2:
+        await message.answer("Укажи место подробнее.")
+        return
+
+    from bot.config import get_settings
+    api_key = get_settings().twogis_api_key
+    if api_key:
+        from bot.services.place_suggest import suggest_places
+        suggestions = await suggest_places(raw, api_key, count=4)
+        if suggestions:
+            fulls = [s.full for s in suggestions]
+            await state.update_data(_tpl_suggestions=fulls, _tpl_place_raw=raw)
+            rows = [
+                [InlineKeyboardButton(text=s.name[:60], callback_data=f"tplp:{i}")]
+                for i, s in enumerate(suggestions)
+            ]
+            keep_label = f"✅ Оставить «{raw[:30]}»"
+            rows.append([InlineKeyboardButton(text=keep_label, callback_data="tplp:keep")])
+            await message.answer(
+                "Выбери место:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+            )
+            return
+
+    await state.update_data(tpl_place=raw[:512])
+    await state.set_state(TemplateSG.cover)
+    await message.answer("Обложка — отправь фото. Или /skip:")
+
+
+@router.callback_query(F.data.startswith("tplp:"), StateFilter(TemplateSG.place))
+async def template_place_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.message is None:
+        await callback.answer()
+        return
+    data = await state.get_data()
+    choice = callback.data.split(":", 1)[1]
+
+    if choice == "keep":
+        place = data.get("_tpl_place_raw", "")
+    else:
+        try:
+            idx = int(choice)
+        except ValueError:
+            await callback.answer()
+            return
+        suggestions = data.get("_tpl_suggestions", [])
+        if idx < 0 or idx >= len(suggestions):
+            await callback.answer()
+            return
+        place = suggestions[idx]
+
+    await state.update_data(tpl_place=place[:512])
+    await state.set_state(TemplateSG.cover)
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer("Обложка — отправь фото. Или /skip:")
+
+
+@router.message(TemplateSG.cover, Command("skip"))
+async def template_cover_skip(message: Message, state: FSMContext) -> None:
+    await state.set_state(TemplateSG.description)
+    await message.answer("Описание (опционально). Или /skip:")
+
+
+@router.message(TemplateSG.cover, F.photo)
+async def template_cover(message: Message, state: FSMContext) -> None:
+    photos = message.photo
+    if not photos:
+        await message.answer("Отправь фото.")
+        return
+    await state.update_data(tpl_cover=photos[-1].file_id)
+    await state.set_state(TemplateSG.description)
+    await message.answer("Описание (опционально). Или /skip:")
+
+
+@router.message(TemplateSG.cover)
+async def template_cover_wrong(message: Message) -> None:
+    await message.answer("Отправь фото или /skip.")
+
+
+@router.message(TemplateSG.description, Command("skip"))
+async def template_desc_skip(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    await _save_template(message, state, session, description=None)
+
+
+@router.message(TemplateSG.description, F.text)
+async def template_desc(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    desc = (message.text or "").strip()
+    await _save_template(message, state, session, description=desc or None)
+
+
+async def _save_template(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    *,
+    description: str | None,
+) -> None:
+    data = await state.get_data()
+    title = data.get("tpl_title", "")
+    place = data.get("tpl_place", "")
+    cover = data.get("tpl_cover")
+
+    tpl = EventTemplate(
+        title=title, place_text=place, description=description,
+        cover_file_id=cover,
+    )
+    session.add(tpl)
+    await session.flush()
+
+    bot_username = get_admin_settings().main_bot_username
+    if not bot_username:
+        from bot.config import get_settings
+        bot_username = get_settings().bot_username or "bot"
+    link = f"https://t.me/{bot_username}?start=tpl_{tpl.id}"
+
+    await state.clear()
+    await message.answer(
+        f"✅ Шаблон создан!\n\n"
+        f"<b>{esc(title)}</b>\n"
+        f"📍 {esc(place) if place else '—'}\n\n"
+        f"Deep link для канала:\n<code>{link}</code>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+@router.message(Command("templates"))
+async def cmd_templates(message: Message, session: AsyncSession) -> None:
+    if not _is_admin(message.from_user.id):
+        return
+    result = await session.execute(
+        select(EventTemplate).order_by(EventTemplate.id.desc()).limit(20),
+    )
+    templates = list(result.scalars().all())
+    if not templates:
+        await message.answer("Шаблонов нет. Создай: /template")
+        return
+
+    bot_username = get_admin_settings().main_bot_username
+    if not bot_username:
+        from bot.config import get_settings
+        bot_username = get_settings().bot_username or "bot"
+
+    lines = ["<b>Шаблоны событий:</b>\n"]
+    for t in templates:
+        link = f"https://t.me/{bot_username}?start=tpl_{t.id}"
+        place_part = f" · {esc(t.place_text)}" if t.place_text else ""
+        lines.append(f"{t.id}. <b>{esc(t.title)}</b>{place_part}\n<code>{link}</code>")
+    await message.answer("\n".join(lines), parse_mode=ParseMode.HTML)

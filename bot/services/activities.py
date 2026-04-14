@@ -470,6 +470,7 @@ async def create_event_draft(
     visibility: str = VISIBILITY_OPEN,
     tag_ids: list[int] | None = None,
     duration: timedelta = DEFAULT_EVENT_DURATION,
+    template_id: int | None = None,
 ) -> Activity:
     activity = Activity(
         city_id=city_id,
@@ -484,6 +485,7 @@ async def create_event_draft(
         cover_file_id=cover_file_id,
         visibility=visibility,
         status=ACTIVITY_PENDING_REVIEW,
+        template_id=template_id,
     )
     session.add(activity)
     await session.flush()
