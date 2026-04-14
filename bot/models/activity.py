@@ -41,6 +41,9 @@ class Activity(Base):
     place_text: Mapped[str] = mapped_column(
         String(512), default="", server_default="",
     )
+    template_id: Mapped[int | None] = mapped_column(
+        ForeignKey("event_templates.id"), nullable=True, index=True,
+    )
     chat_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Telegram file_id обложки активности. NULL — показываем default
     # из bot/assets/default_activity_cover.png через `bot/services/cover.py`.

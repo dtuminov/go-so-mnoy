@@ -150,6 +150,42 @@ async def _start_event_creation(target: Message, state: FSMContext) -> None:
     )
 
 
+async def start_create_from_template(
+    target: Message,
+    state: FSMContext,
+    template,
+) -> None:
+    """Создание события с предзаполненными данными из шаблона.
+
+    Предзаполняем title, place, description, cover.
+    Юзеру остаётся: обложка (сменить/оставить) → дата → чат → теги.
+    """
+    await state.clear()
+    data: dict = {
+        "title": template.title,
+        "place_text": template.place_text,
+        "template_id": template.id,
+        "_from_template": True,
+    }
+    if template.description:
+        data["description"] = template.description
+    if template.cover_file_id:
+        data["cover_file_id"] = template.cover_file_id
+
+    await state.update_data(data)
+    await state.set_state(CreateEventSG.cover)
+
+    from bot.utils.formatting import esc
+    place_info = f"\n📍 {esc(template.place_text)}" if template.place_text else ""
+    cover_hint = "Обложка из шаблона — можешь заменить фото или пропустить." if template.cover_file_id else "Отправь фото обложки или пропусти."
+    await target.answer(
+        f"Создаём событие: <b>{esc(template.title)}</b>{place_info}\n\n"
+        f"{cover_hint}",
+        reply_markup=_skip_kb(CE_COVER_SKIP_CB),
+        parse_mode=ParseMode.HTML,
+    )
+
+
 class CreateEventSG(StatesGroup):
     title = State()
     cover = State()
@@ -234,8 +270,16 @@ async def event_cover_photo(message: Message, state: FSMContext) -> None:
         )
         return
     await state.update_data(cover_file_id=photos[-1].file_id)
-    await state.set_state(CreateEventSG.description)
-    await message.answer("Шаг 3/7: <b>описание</b> (можно одним сообщением).")
+    data = await state.get_data()
+    if data.get("_from_template"):
+        await state.set_state(CreateEventSG.starts_at)
+        await message.answer(
+            "Дата и время начала (Москва).\n"
+            "Примеры: 25.04.2026 19:00 или 2026-04-25 19:00",
+        )
+    else:
+        await state.set_state(CreateEventSG.description)
+        await message.answer("Шаг 3/7: <b>описание</b> (можно одним сообщением).")
 
 
 @router.message(CreateEventSG.cover)
@@ -252,17 +296,27 @@ async def event_cover_skip(callback: CallbackQuery, state: FSMContext) -> None:
     if callback.message is None:
         await callback.answer()
         return
-    await state.update_data(cover_file_id=None)
-    await state.set_state(CreateEventSG.description)
+    data = await state.get_data()
+    if not data.get("cover_file_id"):
+        await state.update_data(cover_file_id=None)
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         pass
-    await callback.message.answer(
-        "Шаг 3/7: <b>описание</b> (можно одним сообщением).",
-        parse_mode=ParseMode.HTML,
-    )
-    await callback.answer("Используем стандартную обложку")
+    if data.get("_from_template"):
+        await state.set_state(CreateEventSG.starts_at)
+        await callback.message.answer(
+            "Дата и время начала (Москва).\n"
+            "Примеры: 25.04.2026 19:00 или 2026-04-25 19:00",
+        )
+        await callback.answer()
+    else:
+        await state.set_state(CreateEventSG.description)
+        await callback.message.answer(
+            "Шаг 3/7: <b>описание</b> (можно одним сообщением).",
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer("Используем стандартную обложку")
 
 
 @router.message(CreateEventSG.description, F.text)
@@ -288,11 +342,22 @@ async def event_starts(message: Message, state: FSMContext) -> None:
         await message.answer(str(e))
         return
     await state.update_data(starts_at_iso=starts_at.isoformat())
-    await state.set_state(CreateEventSG.place)
-    await message.answer(
-        "Шаг 5/7: <b>место</b> — напиши адрес или скинь ссылку из Яндекс Карт.",
-        parse_mode=ParseMode.HTML,
-    )
+    data = await state.get_data()
+    if data.get("_from_template") and data.get("place_text"):
+        # Место уже из шаблона — пропускаем
+        await state.set_state(CreateEventSG.chat_url)
+        await message.answer(
+            "Ссылка на чат события (например, <code>https://t.me/...</code>).\n\n"
+            "Можно пропустить и добавить позже.",
+            reply_markup=_skip_kb(CE_CHAT_SKIP_CB),
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await state.set_state(CreateEventSG.place)
+        await message.answer(
+            "Шаг 5/7: <b>место</b> — напиши адрес или скинь ссылку из Яндекс Карт.",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 @router.callback_query(F.data.startswith("place:pick:"), StateFilter(CreateEventSG.place))
@@ -544,6 +609,7 @@ async def event_tags_done(
         chat_url=chat_url,
         cover_file_id=cover_file_id,
         tag_ids=tag_ids,
+        template_id=data.get("template_id"),
     )
     await state.clear()
     await callback.message.answer(

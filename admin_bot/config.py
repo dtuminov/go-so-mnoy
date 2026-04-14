@@ -17,6 +17,10 @@ class AdminSettings(BaseSettings):
     admin_ids: list[int] = Field(
         description="Telegram user IDs разрешённых админов (через запятую в .env).",
     )
+    main_bot_username: str | None = Field(
+        default=None,
+        description="Username основного (прод) бота для deep link шаблонов.",
+    )
 
     @field_validator("admin_ids", mode="before")
     @classmethod
